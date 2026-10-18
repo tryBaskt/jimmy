@@ -1,4 +1,4 @@
-name: Dev AWS connection
+name: Dev infrastructure
 
 on:
   push:
@@ -19,12 +19,12 @@ jobs:
     permissions:
       contents: read
 
-  aws:
-    name: Verify dev AWS connection
+  provisioning_infra:
+    name: provisioning infra
     needs: ci
     if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 30
     environment: dev
     permissions:
       id-token: write
@@ -32,7 +32,22 @@ jobs:
     env:
       AWS_REGION: us-east-1
       AWS_ACCOUNT_ID: '499133675835'
+      TF_IN_AUTOMATION: 'true'
+      TF_INPUT: 'false'
+      STATE_BUCKET: jimmy-dev-terraform-state-499133675835
+    defaults:
+      run:
+        working-directory: infra/dev
     steps:
+      - name: Check out dev infrastructure
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: 1.15.7
+          terraform_wrapper: false
       - name: Authenticate to AWS with OIDC
         uses: aws-actions/configure-aws-credentials@4a1596c86fd706dc0521e32f0121ad1a6d1adb74 # v6
         with:
@@ -40,17 +55,71 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
           role-session-name: jimmy-dev-${{ github.run_id }}
-          role-duration-seconds: 900
+          role-duration-seconds: 3600
           unset-current-credentials: true
-      - name: Verify AWS account and role
+      - name: Verify AWS account
         run: |
           account="$(aws sts get-caller-identity --query Account --output text)"
           test "${account}" = "${AWS_ACCOUNT_ID}"
-          aws sts get-caller-identity
+      - name: Bootstrap and secure persistent Terraform state
+        run: |
+          if ! aws s3api head-bucket --bucket "${STATE_BUCKET}" \
+            --expected-bucket-owner "${AWS_ACCOUNT_ID}" 2> "${RUNNER_TEMP}/state-bucket-error"; then
+            if ! grep -q '(404)' "${RUNNER_TEMP}/state-bucket-error"; then
+              cat "${RUNNER_TEMP}/state-bucket-error" >&2
+              exit 1
+            fi
+            aws s3api create-bucket --bucket "${STATE_BUCKET}" --region "${AWS_REGION}"
+          fi
+          aws s3api put-public-access-block --bucket "${STATE_BUCKET}" \
+            --expected-bucket-owner "${AWS_ACCOUNT_ID}" \
+            --public-access-block-configuration \
+            BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+          aws s3api put-bucket-versioning --bucket "${STATE_BUCKET}" \
+            --expected-bucket-owner "${AWS_ACCOUNT_ID}" \
+            --versioning-configuration Status=Enabled
+          aws s3api put-bucket-encryption --bucket "${STATE_BUCKET}" \
+            --expected-bucket-owner "${AWS_ACCOUNT_ID}" \
+            --server-side-encryption-configuration \
+            '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+          aws s3api put-bucket-tagging --bucket "${STATE_BUCKET}" \
+            --expected-bucket-owner "${AWS_ACCOUNT_ID}" \
+            --tagging 'TagSet=[{Key=Project,Value=jimmy},{Key=Environment,Value=dev},{Key=Purpose,Value=terraform-state}]'
+          cat > "${RUNNER_TEMP}/state-bucket-policy.json" <<JSON
           {
-            echo '### Dev AWS connection verified'
-            echo "Account: ${account}"
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Sid": "DenyInsecureTransport",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": ["arn:aws:s3:::${STATE_BUCKET}", "arn:aws:s3:::${STATE_BUCKET}/*"],
+              "Condition": {"Bool": {"aws:SecureTransport": "false"}}
+            }]
+          }
+          JSON
+          aws s3api put-bucket-policy --bucket "${STATE_BUCKET}" \
+            --expected-bucket-owner "${AWS_ACCOUNT_ID}" \
+            --policy "file://${RUNNER_TEMP}/state-bucket-policy.json"
+      - name: Initialize Terraform with persistent state
+        run: terraform init -input=false -lockfile=readonly
+      - name: Validate Terraform
+        run: terraform validate
+      - name: Plan dev infrastructure
+        run: terraform plan -input=false -lock-timeout=5m -out=dev.tfplan
+      - name: Apply the saved plan
+        run: terraform apply -input=false -lock-timeout=5m dev.tfplan
+      - name: Verify DynamoDB provisioning
+        run: |
+          table="$(terraform output -raw stock_metadata_table_name)"
+          aws dynamodb wait table-exists --table-name "${table}"
+          aws dynamodb describe-table --table-name "${table}" \
+            --query 'Table.{Name:TableName,Status:TableStatus,Arn:TableArn}'
+          {
+            echo '### Dev infrastructure provisioned'
+            echo "Account: ${AWS_ACCOUNT_ID}"
             echo "Region: ${AWS_REGION}"
+            echo "DynamoDB table: ${table}"
             echo 'Role: jimmy-dev-github-actions'
-            echo 'Application deployment will be added after hosting is selected.'
+            echo "Terraform state: s3://${STATE_BUCKET}/dev/terraform.tfstate"
           } >> "${GITHUB_STEP_SUMMARY}"

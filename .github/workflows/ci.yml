@@ -53,4 +53,6 @@ jobs:
           terraform -chdir=infra/dev init -backend=false -input=false -lockfile=readonly
           terraform -chdir=infra/dev validate
       - name: Validate policy JSON
-        run: python3 -m json.tool infra/dev/iam/dynamodb-provisioning.json > /dev/null
+        run: |
+          python3 -m json.tool infra/dev/iam/dynamodb-provisioning.json > /dev/null
+          python3 -m json.tool infra/dev/iam/terraform-state.json > /dev/null
