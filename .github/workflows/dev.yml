@@ -1,0 +1,56 @@
+name: Dev AWS connection
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jimmy-dev
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  aws:
+    name: Verify dev AWS connection
+    needs: ci
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: dev
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AWS_REGION: us-east-1
+      AWS_ACCOUNT_ID: '499133675835'
+    steps:
+      - name: Authenticate to AWS with OIDC
+        uses: aws-actions/configure-aws-credentials@4a1596c86fd706dc0521e32f0121ad1a6d1adb74 # v6
+        with:
+          role-to-assume: arn:aws:iam::499133675835:role/jimmy-dev-github-actions
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: ${{ env.AWS_ACCOUNT_ID }}
+          role-session-name: jimmy-dev-${{ github.run_id }}
+          role-duration-seconds: 900
+          unset-current-credentials: true
+      - name: Verify AWS account and role
+        run: |
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          test "${account}" = "${AWS_ACCOUNT_ID}"
+          aws sts get-caller-identity
+          {
+            echo '### Dev AWS connection verified'
+            echo "Account: ${account}"
+            echo "Region: ${AWS_REGION}"
+            echo 'Role: jimmy-dev-github-actions'
+            echo 'Application deployment will be added after hosting is selected.'
+          } >> "${GITHUB_STEP_SUMMARY}"
