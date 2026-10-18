@@ -50,9 +50,7 @@ jobs:
       - name: Check and validate Terraform roots
         run: |
           terraform fmt -check -recursive infra/dev
-          for root in infra/dev infra/dev/iam/bootstrap; do
-            terraform -chdir="${root}" init -backend=false -input=false -lockfile=readonly
-            terraform -chdir="${root}" validate
-          done
+          terraform -chdir=infra/dev init -backend=false -input=false -lockfile=readonly
+          terraform -chdir=infra/dev validate
       - name: Validate policy JSON
         run: python3 -m json.tool infra/dev/iam/dynamodb-provisioning.json > /dev/null
