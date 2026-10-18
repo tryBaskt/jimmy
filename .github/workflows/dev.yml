@@ -112,14 +112,18 @@ jobs:
       - name: Verify DynamoDB provisioning
         run: |
           table="$(terraform output -raw stock_metadata_table_name)"
-          aws dynamodb wait table-exists --table-name "${table}"
-          aws dynamodb describe-table --table-name "${table}" \
-            --query 'Table.{Name:TableName,Status:TableStatus,Arn:TableArn}'
+          membership="$(terraform output -raw stock_universe_membership_table_name)"
+          for table_name in "${table}" "${membership}"; do
+            aws dynamodb wait table-exists --table-name "${table_name}"
+            aws dynamodb describe-table --table-name "${table_name}" \
+              --query 'Table.{Name:TableName,Status:TableStatus,Arn:TableArn}'
+          done
           {
             echo '### Dev infrastructure provisioned'
             echo "Account: ${AWS_ACCOUNT_ID}"
             echo "Region: ${AWS_REGION}"
             echo "DynamoDB table: ${table}"
+            echo "Universe membership table: ${membership}"
             echo 'Role: jimmy-dev-github-actions'
             echo "Terraform state: s3://${STATE_BUCKET}/dev/terraform.tfstate"
           } >> "${GITHUB_STEP_SUMMARY}"
