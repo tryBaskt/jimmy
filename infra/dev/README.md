@@ -17,16 +17,41 @@ Only key attributes are declared in Terraform. The ingestion job will write
 ordinary item attributes. These represent current metadata, not historical
 index membership. Missing FMP values can be omitted.
 
-The table name and ARN are exposed as Terraform outputs for future batch jobs.
-This change does not implement ingestion or provision any prod resources.
+The table name and ARN are exposed as Terraform outputs. Ingestion and prod
+infrastructure are outside this deployment.
 
-## Validation and deployment
+## Deployment
 
-Run `terraform fmt -check` and `terraform init -backend=false`, followed by
-`terraform validate`, from this directory to check the configuration without
-deploying resources.
+The `Dev infrastructure` workflow runs on pushes to `dev` and manual dispatches
+from `dev`. After CI passes, its job **provisioning infra**:
 
-Deployment must run through GitHub Actions using `jimmy-dev-github-actions`.
-[Dev IAM](iam/README.md) documents its scoped DynamoDB provisioning policy.
-Remote state and the resource apply workflow are still required before the first
-table deployment. Do not apply locally or commit Terraform state or plan files.
+1. Checks out the triggering commit and authenticates using
+   `jimmy-dev-github-actions` through OIDC.
+2. Creates the dedicated state bucket if absent. An existing inaccessible bucket
+   causes failure rather than being treated as absent.
+3. Enforces private access, versioning, SSE-S3 encryption, tags, and HTTPS-only
+   access on the bucket.
+4. Initializes the S3 backend, validates Terraform, saves a plan, and applies that
+   exact plan.
+5. Verifies the table exists and records its name and ARN in the job logs.
+
+State bucket: `jimmy-dev-terraform-state-499133675835`.
+State key: `dev/terraform.tfstate`; locking uses `dev/terraform.tfstate.tflock`.
+The versioned state persists across workflow runs. No DynamoDB locking table is
+needed. Workflow concurrency and S3 locking prevent simultaneous applies.
+
+The workflow bootstraps the state bucket outside this Terraform root, since the
+backend must exist before Terraform initializes. The bucket is retained across
+runs and is not deleted by a table destroy. Do not delete or rename it without
+planning a state migration. Backend operations use the default Terraform workspace.
+
+[Dev IAM](iam/README.md) documents the two resource-scoped policies on the single
+existing deployment role. The GitHub `dev` environment must allow the `dev` branch.
+PR validation never receives AWS credentials or applies resources.
+
+## Local validation
+
+Run `terraform fmt -check` and `terraform init -backend=false -input=false
+-lockfile=readonly`, followed by `terraform validate`, from this directory.
+Deployment must run through GitHub Actions. Do not apply locally or commit state
+or plan files.

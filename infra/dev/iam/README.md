@@ -1,30 +1,31 @@
 # Dev deployment permissions
 
-Use the existing `jimmy-dev-github-actions` role for dev infrastructure. There
-is no separate IAM role, IAM workflow, permissions boundary, or IAM Terraform root.
+Use only the existing `jimmy-dev-github-actions` role for dev infrastructure.
+There is no separate IAM role or IAM workflow. The role has no IAM permissions
+and cannot grant itself permissions.
 
-`dynamodb-provisioning.json` is the version-controlled policy to attach directly
-to this existing role as inline policy `jimmy-dev-dynamodb-provisioning`.
-It grants lifecycle, describe, and tagging operations on exactly
-`arn:aws:dynamodb:us-east-1:499133675835:table/jimmy-dev-stock-metadata`.
-It grants no item reads/writes, IAM operations, prod access, or other table access.
-The describe calls include Terraform's TTL and continuous-backup read checks;
-changing TTL/backups, restore/import, streams, and autoscaling is outside this scope.
+The version-controlled inline policies are:
 
-The policy was attached to the existing role on October 18, 2026 using the
-authenticated administrator session, and the installed document was verified
-against this file. This was a one-time permissions setup; no new role or boundary
-was created. The deployment role has no IAM permissions and cannot grant itself
-permissions. Future policy changes require an administrator and should be reviewed
-against this file before attachment.
+| File | Inline policy name | Scope |
+|---|---|---|
+| `dynamodb-provisioning.json` | `jimmy-dev-dynamodb-provisioning` | Lifecycle, describe, and tagging for the exact dev metadata table |
+| `terraform-state.json` | `jimmy-dev-terraform-state` | Bootstrap/configure the dedicated state bucket and read/write the exact state and lock objects |
 
-The `dev.yml` workflow authenticates as `jimmy-dev-github-actions` through OIDC and
-verifies the account on pushes to `dev`, or manual runs from `dev`. Configure the
-existing GitHub `dev` environment to allow only the `dev` branch and no tags;
-it currently requires updating from its original `main` restriction. No `dev-iam`
-environment or additional administrator-review environment is required.
+The DynamoDB policy grants no item reads/writes, IAM, prod, or other table access.
+The state policy grants no bucket deletion, state-object deletion, IAM, prod, or
+other bucket access. Only the lock object can be deleted. Bucket-level bootstrap
+permissions are needed because the Actions job creates/configures its own state
+bucket before Terraform initializes its backend.
 
-CI checks workflow syntax, policy JSON, and the dev resource Terraform root on
-PRs to `dev` and `main` without AWS credentials. It never applies permissions or
-creates resources. The resource apply workflow and remote Terraform state,
-including state-access permissions for the existing role, are still pending.
+Both policy documents are attached once through the authenticated administrator
+session and verified against these files. Subsequent resource creation, including
+the state bucket and DynamoDB table, is performed by GitHub Actions. Future policy
+changes require an administrator and review against these files.
+
+The `Dev infrastructure` workflow's **provisioning infra** job uses this role
+through OIDC on pushes to `dev`, or manual runs from `dev`. The existing GitHub
+`dev` environment must allow only the `dev` branch and no tags. No additional
+GitHub environment is required.
+
+CI checks workflow syntax, both policy JSON files, and dev Terraform on PRs to
+`dev` and `main` without AWS credentials. It never applies infrastructure.
