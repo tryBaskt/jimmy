@@ -77,3 +77,22 @@ value was uploaded directly from the local `.env` using an administrator session
 No secret-version resource, secret-value data source, or value output is used,
 so Terraform does not read or store the API key. Destruction is prevented.
 The local ingestion script reads the value at runtime using the local AWS profile.
+
+## Application provisioning
+
+The same dev workflow now runs these jobs in order:
+
+`CI` → **provisioning infra** → **provisioning backend** → **provisioning frontend**
+
+The original root still manages DynamoDB and the FMP secret metadata. The child
+roots [`backend/`](backend/README.md) and [`frontend/`](frontend/README.md) own
+separate application resources and state files; Terraform does not recursively
+apply child directories. No existing resources or state addresses are moved.
+Every job uses `jimmy-dev-github-actions` and the protected `dev` environment.
+The final job writes the deployed frontend URL to the workflow summary.
+
+Before running the expanded workflow, an administrator must update the existing
+role's `jimmy-dev-terraform-state` inline policy from `iam/terraform-state.json`
+and add `iam/application-provisioning.json` as `jimmy-dev-application-provisioning`.
+The workflow cannot grant itself these additional permissions. See the IAM README.
+Prod is not deployed by this workflow; `infra/prod` remains independent.
