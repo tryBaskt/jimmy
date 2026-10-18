@@ -9,6 +9,7 @@ The version-controlled inline policies are:
 | File | Inline policy name | Scope |
 |---|---|---|
 | `dynamodb-provisioning.json` | `jimmy-dev-dynamodb-provisioning` | Lifecycle, describe, and tagging for the exact dev metadata and universe-membership tables |
+| `fmp-secret-provisioning.json` | `jimmy-dev-fmp-secret-provisioning` | Describe/update/tag metadata for the exact imported FMP secret; no secret-value reads |
 | `terraform-state.json` | `jimmy-dev-terraform-state` | Bootstrap/configure the dedicated state bucket and read/write the exact state and lock objects |
 
 The DynamoDB policy grants no item reads/writes, IAM, prod, or other table access.
@@ -17,7 +18,7 @@ other bucket access. Only the lock object can be deleted. Bucket-level bootstrap
 permissions are needed because the Actions job creates/configures its own state
 bucket before Terraform initializes its backend.
 
-Both policy documents are attached once through the authenticated administrator
+These policy documents are attached once through the authenticated administrator
 session and verified against these files. Subsequent resource creation, including
 the state bucket and DynamoDB table, is performed by GitHub Actions. Future policy
 changes require an administrator and review against these files.

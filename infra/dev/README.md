@@ -69,3 +69,11 @@ Run `terraform fmt -check` and `terraform init -backend=false -input=false
 -lockfile=readonly`, followed by `terraform validate`, from this directory.
 Deployment must run through GitHub Actions. Do not apply locally or commit state
 or plan files.
+
+## FMP API secret
+
+`secrets.tf` imports and manages the metadata of `jimmy-dev-fmp-api-key`. Its
+value was uploaded directly from the local `.env` using an administrator session.
+No secret-version resource, secret-value data source, or value output is used,
+so Terraform does not read or store the API key. Destruction is prevented.
+The local ingestion script reads the value at runtime using the local AWS profile.
