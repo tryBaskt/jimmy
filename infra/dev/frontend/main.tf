@@ -1,5 +1,5 @@
 variable "api_url" {
-  description = "HTTPS API Gateway origin URL from the backend provisioning job."
+  description = "HTTPS API Gateway origin URL from the API provisioning job."
   type        = string
   validation {
     condition     = can(regex("^https://[a-z0-9]+\\.execute-api\\.us-east-1\\.amazonaws\\.com$", var.api_url))

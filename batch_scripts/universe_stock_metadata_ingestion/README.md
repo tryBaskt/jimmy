@@ -78,45 +78,120 @@ Russell proxies: retained listed equity rows from the official iShares CSVs. Exc
 
 ## Local ingestion
 
-Install the dependencies into the project virtual environment:
+Requires macOS/Linux and Python 3.10+. From the Jimmy repository root:
 
 ```sh
 venv/bin/python -m pip install -r batch_scripts/universe_stock_metadata_ingestion/requirements.txt
+venv/bin/python batch_scripts/universe_stock_metadata_ingestion/universe_stock_ingest.py --validate-inputs
 ```
 
-Run from the Jimmy repository root:
+Start with S&P 500 and groups of 10:
 
 ```sh
-venv/bin/python batch_scripts/universe_stock_metadata_ingestion/universe_stock_ingest.py --validate-inputs
-venv/bin/python batch_scripts/universe_stock_metadata_ingestion/universe_stock_ingest.py --profile siby_baskt --dry-run --limit 5
-venv/bin/python batch_scripts/universe_stock_metadata_ingestion/universe_stock_ingest.py --profile siby_baskt
+venv/bin/python batch_scripts/universe_stock_metadata_ingestion/universe_stock_ingest.py \
+  --profile siby_baskt --universe SP500 --batch-size 10
 ```
 
-The script reads the FMP key at runtime from Secrets Manager secret
-`jimmy-dev-fmp-api-key` in `us-east-1`, in account `499133675835`.
-Use `--fmp-secret-id` to override the secret name/ARN. The secret contains the raw
-API key as SecretString. The script does not load `.env`. An explicitly supplied
-`FMP_API_KEY` environment variable takes precedence, for runtime secret injection.
-The key is never logged or written to DynamoDB. The original `.env` is gitignored
-and is not modified by this change.
+Run the same command again to resume. Repeat `--universe` for other universes;
+omitting it selects all five. `--limit` processes the first N sorted unique
+symbols, but coverage still reports the full input universe size.
 
-Your local AWS profile needs `secretsmanager:GetSecretValue` on that exact secret,
-`sts:GetCallerIdentity`, and `dynamodb:DescribeTable` plus
-`dynamodb:BatchWriteItem` on both stock tables. The deployment role has only
-secret metadata management permissions; it is not granted secret-value reads.
+### Profile batching and subscription access
 
-`--validate-inputs` uses no network. `--dry-run` reads the secret and fetches FMP
-profiles without touching DynamoDB. `--limit` selects the first N sorted unique
-symbols. `--universe` can be repeated to select specific universes.
+The script tries up to 10 comma-separated symbols on `/stable/profile?symbol=...`
+and validates each returned symbol. This is capability detection, not a claim
+that Basic supports profile batching. FMP documents its stable profile API for
+one symbol and a separate profile-bulk endpoint for bulk CSV downloads. The
+batch quote and market-cap endpoints do not supply the full agreed company
+metadata schema, so the script does not substitute them for company profiles.
 
-One request is made per unique ticker. The default rate is 60 requests/minute;
-set `--requests-per-minute` within the limits of your FMP subscription. Transient
-requests and unprocessed DynamoDB writes are retried with bounded backoff.
+If the multi-symbol request is rejected with HTTP 400/402/403/404/422, or returns
+only some requested symbols, valid returned profiles are reused and missing
+symbols are fetched individually. This fallback is remembered in the checkpoint
+so subsequent batches/runs do not repeatedly probe unsupported batching. Use
+`--single-profile-requests` to bypass the probe entirely. Authentication errors,
+malformed responses, unexpected/duplicate symbols, and single-profile access
+errors stop the run without declaring the affected symbols unresolved.
 
-All profiles are fetched and validated before any database writes. Missing or
-invalid FMP profiles stop the run instead of publishing an incomplete snapshot.
-The script upserts stock profiles and universe/symbol pairs, then logs when each
-universe's membership writes finish. Russell universes retain `_PROXY` labels.
-Writes across tables are not atomic, and old memberships are not deleted. Rerun
-after resolving a failure to complete an interrupted run. This script does not
-create tables or change IAM permissions.
+A supported batch of 10 is one HTTP attempt. A rejected probe plus ten single
+requests is eleven attempts. Batching does not grant access to paid endpoints.
+Live batch access must be verified with your subscription; the automated tests
+use mocked responses and consume no provider quota.
+
+References: [company profile documentation](https://site.financialmodelingprep.com/developer/docs),
+[profile bulk](https://site.financialmodelingprep.com/developer/docs/stable/profile-bulk),
+[batch market cap](https://site.financialmodelingprep.com/developer/docs/stable/batch-market-cap).
+
+### Progress, caching, and daily allowance
+
+- Default group size: 10 symbols, adjustable from 1 to 10 with `--batch-size`.
+- Request pacing remains 60 HTTP attempts/minute (`--requests-per-minute`).
+- Default local budget: **200 HTTP attempts in a rolling 24-hour window**
+  (`--max-requests-per-day`), leaving headroom under FMP's advertised 250/day Basic
+  allowance. Retries, failed requests, and capability probes count too.
+- The budget persists across runs in the checkpoint. It counts this script's
+  attempts with that checkpoint, not other clients or historical calls made before
+  the checkpoint existed. FMP remains the authority on actual quota/entitlements.
+- HTTP 429 stops immediately instead of repeatedly consuming requests. Exit code
+  **2** means paused; rerun after the provider allowance becomes available.
+- Each validated profile is cached immediately. At the end of each group, even
+  if a later request fails, successful profiles and their memberships are upserted
+  into DynamoDB. Earlier groups remain uploaded when later groups fail.
+- A record is marked published only after both its metadata and membership writes
+  finish. Interrupted writes are replayed from the cached profile without another
+  FMP request. Writes across tables are not atomic.
+- Each universe reports uploaded/total, cached, skipped, and pending counts. A
+  universe is logged as done only after all input symbols are uploaded or skipped.
+  These counts reflect this checkpoint's acknowledgements, not a fresh database
+  recount; restore/rebuild operations on DynamoDB require reconciling the cache.
+
+The default checkpoint is `.ingestion_state/checkpoint.json` beside the script.
+It stores validated metadata, completed memberships, unresolved symbols, batch
+capability, and request timestamps. It contains no API key and is gitignored.
+Atomic replacement protects saves; a file lock prevents concurrent runs using
+that checkpoint. Keep using the same checkpoint across universes and dry runs.
+Do not delete it to reset a provider allowance: that loses both resume information
+and the local budget history. `--checkpoint` can override its location; separate
+checkpoints do not share quota accounting. Cached metadata is reused until
+explicitly refreshed; this is an initial ingestion/resume tool, not a scheduled
+metadata refresh service.
+
+Unresolved symbols are excluded from new writes to both tables and reported in
+`unresolved_symbols.json` (override with `--unresolved-report`). Reruns skip them
+without another FMP call unless `--retry-unresolved` is supplied. Old profiles or
+memberships already in DynamoDB are not deleted. Previously known memberships
+are preserved when a cached symbol is added to another selected universe.
+Russell memberships retain their `_PROXY` labels.
+
+`--dry-run` fetches and caches missing profiles and spends the same request budget,
+but never connects to DynamoDB or marks profiles published. A subsequent normal
+run can upload the cache without fetching those profiles again. Use `--limit 10`
+for a small dry run. `--validate-inputs` is fully offline and does not change the
+checkpoint or spend quota. Exit code 0 means the selected work completed, 1 means
+failure, and 130 means interrupted. A limited run can complete while full-universe
+coverage still has pending symbols.
+
+### Credentials
+
+The script resolves the FMP key at runtime from Secrets Manager secret
+`jimmy-dev-fmp-api-key` in `us-east-1`, account `499133675835`. The secret contains
+the raw API key as SecretString. `--fmp-secret-id` overrides the secret name/ARN.
+An explicitly injected `FMP_API_KEY` environment variable takes precedence; the
+script does not load `.env`. Keys are never logged or stored in the checkpoint,
+reports, or DynamoDB. Cached-only resumes do not need a secret lookup.
+
+The local profile needs `secretsmanager:GetSecretValue` on that secret,
+`sts:GetCallerIdentity`, `dynamodb:DescribeTable`, and `dynamodb:BatchWriteItem`
+on the two stock tables. This script does not change IAM or provision resources.
+
+### Offline tests
+
+With pytest installed in the project venv:
+
+```sh
+venv/bin/python -m pytest batch_scripts/universe_stock_metadata_ingestion/tests -q
+```
+
+Tests mock FMP, credentials, and DynamoDB writes. They cover complete and partial
+batches, access denial fallback, persistent quota limits, HTTP 429, retries,
+resumption after partial writes, dry-run caching, and overlapping universes.

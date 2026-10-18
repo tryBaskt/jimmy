@@ -25,5 +25,5 @@ def test_http_api_event_reaches_fastapi_health():
     assert response["statusCode"] == 200
     assert json.loads(response["body"]) == {
         "status": "ok",
-        "service": "jimmy-backend",
+        "service": "jimmy-api",
     }

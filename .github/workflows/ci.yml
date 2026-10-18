@@ -50,7 +50,7 @@ jobs:
       - name: Check and validate Terraform roots
         run: |
           terraform fmt -check -recursive infra/dev
-          for root in infra/dev infra/dev/backend infra/dev/frontend; do
+          for root in infra/dev infra/dev/api infra/dev/frontend; do
             terraform -chdir="${root}" init -backend=false -input=false -lockfile=readonly
             terraform -chdir="${root}" validate
           done
@@ -62,8 +62,8 @@ jobs:
           python3 -m json.tool infra/dev/iam/application-provisioning.json > /dev/null
 
 
-  backend:
-    name: Validate FastAPI backend
+  api:
+    name: Validate FastAPI API
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -75,10 +75,28 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.14'
-      - name: Install backend dependencies
-        run: python -m pip install -r backend/requirements-dev.txt -r backend/requirements-lambda.txt
-      - name: Test backend and Lambda handler
-        run: python -m pytest -c backend/pytest.ini backend/tests
+      - name: Install API dependencies
+        run: python -m pip install -r api/requirements-dev.txt -r api/requirements-lambda.txt
+      - name: Test API and Lambda handler
+        run: python -m pytest -c api/pytest.ini api/tests
+
+  clients:
+    name: Validate shared Python clients
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.14'
+      - name: Install client dependencies
+        run: python -m pip install -r packages/clients/requirements.txt pytest==9.1.1
+      - name: Test shared clients and research workflow
+        run: python -m pytest packages/clients/tests packages/agentic_workflows/strategy_and_research/tests -q
 
   frontend:
     name: Validate React frontend
