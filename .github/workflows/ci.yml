@@ -56,3 +56,4 @@ jobs:
         run: |
           python3 -m json.tool infra/dev/iam/dynamodb-provisioning.json > /dev/null
           python3 -m json.tool infra/dev/iam/terraform-state.json > /dev/null
+          python3 -m json.tool infra/dev/iam/fmp-secret-provisioning.json > /dev/null
