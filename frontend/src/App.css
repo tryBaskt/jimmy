@@ -1,0 +1,15 @@
+main { max-width: 1050px; margin: auto; padding: 0 32px; }
+header { display: flex; align-items: center; justify-content: space-between; padding: 28px 0; border-bottom: 1px solid #daddd3; font-size: 14px; color: #667367; }
+.brand { color: #244d39; font-size: 28px; font-weight: 750; letter-spacing: -1px; }
+.intro { padding: 90px 0 56px; max-width: 700px; }
+.eyebrow { font-size: 12px; letter-spacing: 2px; font-weight: 650; }
+h1 { font-family: Georgia, serif; font-size: clamp(40px, 6vw, 70px); line-height: 1.1; letter-spacing: -2px; font-weight: 400; margin: 24px 0; }
+.intro > p:last-child { max-width: 520px; color: #617063; line-height: 1.7; }
+.connection { display: flex; justify-content: space-between; align-items: center; gap: 24px; background: white; border: 1px solid #daddd3; border-radius: 12px; padding: 28px; }
+h2 { font-size: 16px; margin: 0; }
+.connection p { margin-bottom: 0; font-size: 14px; }
+.connected { color: #277148; }
+.hint { color: #7a5541; line-height: 1.6; }
+button { background: #244d39; color: white; border: 0; border-radius: 6px; padding: 12px 18px; white-space: nowrap; }
+footer { padding: 32px 0; color: #667367; font-size: 12px; }
+@media (max-width: 600px) { main { padding: 0 20px; } .intro { padding-top: 56px; } .connection { align-items: flex-start; flex-direction: column; } }

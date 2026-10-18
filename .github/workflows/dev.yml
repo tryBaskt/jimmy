@@ -127,3 +127,135 @@ jobs:
             echo 'Role: jimmy-dev-github-actions'
             echo "Terraform state: s3://${STATE_BUCKET}/dev/terraform.tfstate"
           } >> "${GITHUB_STEP_SUMMARY}"
+
+  provisioning_backend:
+    name: provisioning backend
+    needs: provisioning_infra
+    if: github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: dev
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      api_url: ${{ steps.outputs.outputs.api_url }}
+    env:
+      AWS_REGION: us-east-1
+      TF_IN_AUTOMATION: 'true'
+      TF_INPUT: 'false'
+      TF_VAR_package_path: ${{ github.workspace }}/backend/build/backend.zip
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.14'
+      - name: Build Linux Lambda package
+        run: |
+          python -m pip install --no-compile -r backend/requirements-lambda.txt --target backend/build/package
+          cp -R backend/app backend/build/package/app
+          python -c "import shutil; shutil.make_archive('backend/build/backend', 'zip', 'backend/build/package')"
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: 1.15.7
+          terraform_wrapper: false
+      - name: Authenticate to AWS with OIDC
+        uses: aws-actions/configure-aws-credentials@4a1596c86fd706dc0521e32f0121ad1a6d1adb74 # v6
+        with:
+          role-to-assume: arn:aws:iam::499133675835:role/jimmy-dev-github-actions
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: '499133675835'
+          role-session-name: jimmy-dev-backend-${{ github.run_id }}
+          unset-current-credentials: true
+      - name: Provision backend
+        working-directory: infra/dev/backend
+        run: |
+          terraform init -input=false -lockfile=readonly
+          terraform validate
+          terraform plan -input=false -lock-timeout=5m -out=backend.tfplan
+          terraform apply -input=false -lock-timeout=5m backend.tfplan
+      - name: Verify backend and publish its URL
+        id: outputs
+        working-directory: infra/dev/backend
+        run: |
+          api_url="$(terraform output -raw api_url)"
+          curl --fail --silent --show-error --retry 12 --retry-all-errors --retry-delay 5 \
+            "${api_url}/api/health" | python -c 'import json,sys; assert json.load(sys.stdin) == {"status":"ok","service":"jimmy-backend"}'
+          echo "api_url=${api_url}" >> "${GITHUB_OUTPUT}"
+          echo "Backend: ${api_url}/api/health" >> "${GITHUB_STEP_SUMMARY}"
+
+  provisioning_frontend:
+    name: provisioning frontend
+    needs: provisioning_backend
+    if: github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: dev
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AWS_REGION: us-east-1
+      TF_IN_AUTOMATION: 'true'
+      TF_INPUT: 'false'
+      TF_VAR_api_url: ${{ needs.provisioning_backend.outputs.api_url }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build React frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: 1.15.7
+          terraform_wrapper: false
+      - name: Authenticate to AWS with OIDC
+        uses: aws-actions/configure-aws-credentials@4a1596c86fd706dc0521e32f0121ad1a6d1adb74 # v6
+        with:
+          role-to-assume: arn:aws:iam::499133675835:role/jimmy-dev-github-actions
+          aws-region: ${{ env.AWS_REGION }}
+          allowed-account-ids: '499133675835'
+          role-session-name: jimmy-dev-frontend-${{ github.run_id }}
+          unset-current-credentials: true
+      - name: Provision frontend
+        working-directory: infra/dev/frontend
+        run: |
+          terraform init -input=false -lockfile=readonly
+          terraform validate
+          terraform plan -input=false -lock-timeout=5m -out=frontend.tfplan
+          terraform apply -input=false -lock-timeout=5m frontend.tfplan
+      - name: Publish frontend and verify API routing
+        working-directory: infra/dev/frontend
+        run: |
+          bucket="$(terraform output -raw bucket_name)"
+          distribution="$(terraform output -raw distribution_id)"
+          frontend_url="$(terraform output -raw frontend_url)"
+          # Retain old hashed assets so already-open browser tabs keep working.
+          aws s3 sync ../../../frontend/dist/ "s3://${bucket}/" \
+            --exclude index.html --cache-control 'public,max-age=31536000,immutable' --only-show-errors
+          aws s3 cp ../../../frontend/dist/index.html "s3://${bucket}/index.html" \
+            --content-type 'text/html' --cache-control 'no-cache' --only-show-errors
+          invalidation="$(aws cloudfront create-invalidation --distribution-id "${distribution}" \
+            --paths '/*' --query Invalidation.Id --output text)"
+          aws cloudfront wait invalidation-completed --distribution-id "${distribution}" --id "${invalidation}"
+          curl --fail --silent --show-error --retry 12 --retry-all-errors --retry-delay 5 \
+            "${frontend_url}/" --output /dev/null
+          curl --fail --silent --show-error --retry 12 --retry-all-errors --retry-delay 5 \
+            "${frontend_url}/api/health" | python3 -c 'import json,sys; assert json.load(sys.stdin) == {"status":"ok","service":"jimmy-backend"}'
+          echo "Frontend: ${frontend_url}" >> "${GITHUB_STEP_SUMMARY}"

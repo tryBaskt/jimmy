@@ -50,10 +50,56 @@ jobs:
       - name: Check and validate Terraform roots
         run: |
           terraform fmt -check -recursive infra/dev
-          terraform -chdir=infra/dev init -backend=false -input=false -lockfile=readonly
-          terraform -chdir=infra/dev validate
+          for root in infra/dev infra/dev/backend infra/dev/frontend; do
+            terraform -chdir="${root}" init -backend=false -input=false -lockfile=readonly
+            terraform -chdir="${root}" validate
+          done
       - name: Validate policy JSON
         run: |
           python3 -m json.tool infra/dev/iam/dynamodb-provisioning.json > /dev/null
           python3 -m json.tool infra/dev/iam/terraform-state.json > /dev/null
           python3 -m json.tool infra/dev/iam/fmp-secret-provisioning.json > /dev/null
+          python3 -m json.tool infra/dev/iam/application-provisioning.json > /dev/null
+
+
+  backend:
+    name: Validate FastAPI backend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.14'
+      - name: Install backend dependencies
+        run: python -m pip install -r backend/requirements-dev.txt -r backend/requirements-lambda.txt
+      - name: Test backend and Lambda handler
+        run: python -m pytest -c backend/pytest.ini backend/tests
+
+  frontend:
+    name: Validate React frontend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Validate frontend
+        run: |
+          npm ci
+          npm run lint
+          npm run build

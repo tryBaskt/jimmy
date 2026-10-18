@@ -22,14 +22,29 @@
     {
       "Sid": "ReadWriteDevState",
       "Effect": "Allow",
-      "Action": ["s3:GetObject", "s3:PutObject"],
-      "Resource": "arn:aws:s3:::jimmy-dev-terraform-state-499133675835/dev/terraform.tfstate"
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::jimmy-dev-terraform-state-499133675835/dev/terraform.tfstate",
+        "arn:aws:s3:::jimmy-dev-terraform-state-499133675835/dev/backend/terraform.tfstate",
+        "arn:aws:s3:::jimmy-dev-terraform-state-499133675835/dev/frontend/terraform.tfstate"
+      ]
     },
     {
       "Sid": "ManageDevStateLock",
       "Effect": "Allow",
-      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-      "Resource": "arn:aws:s3:::jimmy-dev-terraform-state-499133675835/dev/terraform.tfstate.tflock"
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::jimmy-dev-terraform-state-499133675835/dev/terraform.tfstate.tflock",
+        "arn:aws:s3:::jimmy-dev-terraform-state-499133675835/dev/backend/terraform.tfstate.tflock",
+        "arn:aws:s3:::jimmy-dev-terraform-state-499133675835/dev/frontend/terraform.tfstate.tflock"
+      ]
     }
   ]
 }
