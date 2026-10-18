@@ -17,7 +17,21 @@ Only key attributes are declared in Terraform. The ingestion job will write
 ordinary item attributes. These represent current metadata, not historical
 index membership. Missing FMP values can be omitted.
 
-The table name and ARN are exposed as Terraform outputs. Ingestion and prod
+## Stock universe membership table
+
+- Name: `jimmy-dev-stock-universe-membership`
+- Partition key: `universe` (String), such as `SP500` or `NASDAQ100`
+- Sort key: `symbol` (String), containing the FMP symbol
+- Capacity: on-demand (`PAY_PER_REQUEST`)
+- No secondary indexes, TTL, or initial items
+
+Each item contains only a universe and symbol pair. The composite key makes each
+pair unique while allowing a symbol to belong to multiple universes. Query by
+`universe` to retrieve its stock symbols. Reverse lookup by symbol is not indexed.
+These are current memberships; they do not include historical effective dates.
+Keep ETF-derived Russell memberships identified as proxies in ingestion and UI.
+
+Both table names and ARNs are exposed as Terraform outputs. Ingestion and prod
 infrastructure are outside this deployment.
 
 ## Deployment
@@ -33,7 +47,7 @@ from `dev`. After CI passes, its job **provisioning infra**:
    access on the bucket.
 4. Initializes the S3 backend, validates Terraform, saves a plan, and applies that
    exact plan.
-5. Verifies the table exists and records its name and ARN in the job logs.
+5. Verifies both tables exist and records their names and ARNs in the job logs.
 
 State bucket: `jimmy-dev-terraform-state-499133675835`.
 State key: `dev/terraform.tfstate`; locking uses `dev/terraform.tfstate.tflock`.

@@ -8,7 +8,7 @@ The version-controlled inline policies are:
 
 | File | Inline policy name | Scope |
 |---|---|---|
-| `dynamodb-provisioning.json` | `jimmy-dev-dynamodb-provisioning` | Lifecycle, describe, and tagging for the exact dev metadata table |
+| `dynamodb-provisioning.json` | `jimmy-dev-dynamodb-provisioning` | Lifecycle, describe, and tagging for the exact dev metadata and universe-membership tables |
 | `terraform-state.json` | `jimmy-dev-terraform-state` | Bootstrap/configure the dedicated state bucket and read/write the exact state and lock objects |
 
 The DynamoDB policy grants no item reads/writes, IAM, prod, or other table access.

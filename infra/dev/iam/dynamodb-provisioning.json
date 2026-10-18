@@ -2,7 +2,7 @@
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "ProvisionStockMetadataTable",
+      "Sid": "ProvisionStockTables",
       "Effect": "Allow",
       "Action": [
         "dynamodb:CreateTable",
@@ -15,7 +15,10 @@
         "dynamodb:TagResource",
         "dynamodb:UntagResource"
       ],
-      "Resource": "arn:aws:dynamodb:us-east-1:499133675835:table/jimmy-dev-stock-metadata"
+      "Resource": [
+        "arn:aws:dynamodb:us-east-1:499133675835:table/jimmy-dev-stock-metadata",
+        "arn:aws:dynamodb:us-east-1:499133675835:table/jimmy-dev-stock-universe-membership"
+      ]
     }
   ]
 }
