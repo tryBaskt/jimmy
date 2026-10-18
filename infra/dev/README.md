@@ -26,7 +26,7 @@ Run `terraform fmt -check` and `terraform init -backend=false`, followed by
 `terraform validate`, from this directory to check the configuration without
 deploying resources.
 
-Deployment must run through GitHub Actions. Remote state and the Actions
-deployment permissions must be configured before the first apply; this root
-does not yet configure a remote backend or an apply workflow. Do not apply
-locally or commit Terraform state or plan files.
+Deployment must run through GitHub Actions. [Dev IAM](iam/README.md) defines the
+separate IAM workflow, scoped deployment policy, and administrator bootstrap.
+Remote state and the resource apply workflow are still required before the first
+table deployment. Do not apply locally or commit Terraform state or plan files.

@@ -2,7 +2,7 @@ name: Dev AWS connection
 
 on:
   push:
-    branches: [main]
+    branches: [dev]
   workflow_dispatch:
 
 permissions:
@@ -22,7 +22,7 @@ jobs:
   aws:
     name: Verify dev AWS connection
     needs: ci
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     environment: dev
