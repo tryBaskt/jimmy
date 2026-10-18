@@ -1,42 +1,74 @@
 # Jimmy
 
-AI-native quantitative research platform. Application implementation has not started.
+AI-native quantitative research platform.
 
-## Development environment
+## Codebase layout
 
-- AWS account: `499133675835`
-- AWS region: `us-east-1`
-- Environment: `dev`
-- AWS resource names: `jimmy-<env>-<purpose>`
-- GitHub Actions role: `jimmy-dev-github-actions`
+- `frontend/`: React application.
+- `api/`: FastAPI routes and the Lambda entry point for HTTP requests.
+- `workers/`: independently runnable background jobs, including the local strategy research runner.
+- `packages/`: reusable Python code. `clients/` contains market-data, DynamoDB, and simulation adapters; `agentic_workflows/` contains the strategy research logic.
+- `batch_scripts/`: locally runnable data ingestion jobs.
+- `infra/dev/` and `infra/prod/`: infrastructure for each environment.
 
-## GitHub Actions
+The API and each worker will build separately and use only the shared packages they need.
+The existing AWS API resources retain their `jimmy-dev-backend` names and Terraform
+state key while the code moves to `api/`, so this layout change does not replace them.
 
-- **CI** validates the workflow files with checksum-verified Actionlint on pull
-  requests to `main`. It is also reusable by the dev workflow and can run manually.
-- **Dev AWS connection** runs on pushes to `main` or manually from `main`. It
-  requires CI to pass, then verifies OIDC authentication and the AWS account.
-- The GitHub environment `dev` permits only the `main` branch, with no allowed
-  tags. PR checks have no AWS credentials or OIDC token permission.
-- Third-party Actions are pinned to full commit SHAs. There are no stored AWS keys.
+The strategy research runner is a finite local job. See [its instructions](workers/strategy_research/README.md)
+for the Bedrock-backed momentum example; it is not started by `npm run dev`.
 
-This is the CI/CD foundation, not an application deployment. Once hosting is
-selected, add build, test, and deployment steps here. All application and
-infrastructure deployments must run through GitHub Actions.
+## Run all local services
 
-## AWS authentication bootstrap
+From the `jimmy` repository root:
 
-The account-wide GitHub OIDC provider already existed and is reused unchanged.
-The project role's trust policy is tracked in
-[`infra/iam/github-actions-dev-trust.json`](infra/iam/github-actions-dev-trust.json).
-Its subject uses immutable GitHub owner and repository IDs and is restricted to
-the `dev` environment. The environment's branch restriction is a required part of
-this trust configuration: an environment OIDC subject alone does not limit branches.
+```sh
+npm run dev
+```
 
-The role is initially created without attached permission policies. It can verify
-its identity with STS but cannot deploy resources. Add resource-specific deployment
-permissions when the hosting design is approved; do not attach administrator access.
+This starts the React frontend at http://127.0.0.1:5173 and FastAPI at
+http://127.0.0.1:8000, with API docs at http://127.0.0.1:8000/api/docs.
+The API uses `venv/bin/python` directly, so activating the venv is optional.
+Each service has labelled logs and hot reload. Press Ctrl+C to stop all services.
+For the strategy prompt and results view, run `AWS_PROFILE=siby_baskt npm run dev`
+so the local API can access DynamoDB and Amazon Bedrock.
+If any service exits, the launcher stops the others. Stop separately launched
+servers first if they already occupy ports 5173 or 8000.
 
-The one-time IAM role bootstrap is performed using an existing AWS administrator
-session because GitHub Actions cannot assume a role before it exists. Subsequent
-deployment changes belong in Actions and version-controlled infrastructure.
+On a fresh checkout, install dependencies once (Node 24 and Python 3.14):
+
+```sh
+python3 -m venv venv
+venv/bin/python -m pip install -r api/requirements-dev.txt
+venv/bin/python -m pip install -r packages/clients/requirements.txt
+npm ci
+npm --prefix frontend ci
+```
+
+For alternate local ports:
+
+```sh
+API_PORT=18000 FRONTEND_PORT=15173 npm run dev
+```
+
+Vite forwards `/api/*` to the chosen API port. These port variables affect
+local development only. This command does not run ingestion or deploy AWS resources.
+
+### Add a future local service
+
+Add a long-running `dev:<service>` script in the root `package.json`, for example:
+
+```json
+"dev:research": "./venv/bin/python -m workers.research"
+```
+
+This is an example for when a long-running worker module exists; no worker is currently
+configured. `npm run dev` discovers every `dev:*` script automatically. Install
+each service's dependencies before starting it, and give HTTP services distinct
+ports. Services start concurrently; future services that depend on each other
+must handle readiness/reconnection themselves. Keep finite batch jobs outside
+`dev:*`, since a finished service stops the whole group.
+
+
+## TODO
+DynamoDB contains current universe membership, which introduces survivorship bias into historical results.

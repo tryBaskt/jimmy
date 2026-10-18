@@ -1,7 +1,7 @@
 # Dev frontend
 
 Independent Terraform root, applied by the **provisioning frontend** job after
-backend provisioning. It receives `api_url` from the backend job and owns private
+API provisioning. It receives `api_url` from the API job and owns private
 S3, CloudFront, origin access control, and a small SPA routing function.
 
 - Bucket: `jimmy-dev-frontend-499133675835` (account suffix ensures global uniqueness)

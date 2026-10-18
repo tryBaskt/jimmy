@@ -1,0 +1,3 @@
+.ingestion_state/
+unresolved_symbols.json
+.pytest_cache/

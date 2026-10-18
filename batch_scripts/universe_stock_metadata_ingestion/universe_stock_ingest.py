@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Ingest local stock universes and FMP company profiles into dev DynamoDB.
 
-Requires Python 3.10+ and boto3 (``python -m pip install boto3``). The FMP key is
+Requires macOS/Linux, Python 3.10+, and boto3 (``python -m pip install boto3``). The FMP key is
 loaded at runtime from Secrets Manager secret jimmy-dev-fmp-api-key. Never put
 the key in command arguments or source control. FMP_API_KEY is an optional
 runtime environment override, for example when injected by a secret resolver.
@@ -16,11 +16,16 @@ for each universe is selected, with an undated file as fallback. Russell ETF
 proxies retain distinct RUSSELL1000_PROXY / RUSSELL2000_PROXY / RUSSELL3000_PROXY
 labels. Each unique symbol is fetched once, even across overlapping universes.
 
---validate-inputs is entirely offline. --dry-run fetches the secret and calls FMP
-but never accesses DynamoDB.
-Normal runs check the AWS account and both table schemas, then fetch/validate all
-profiles before writing anything. Writes upsert complete profile items and exact
-universe/symbol pairs. They do not delete stale memberships or old profiles.
+--validate-inputs is entirely offline. --dry-run caches any newly fetched profiles
+but never accesses DynamoDB. Cached-only runs need no FMP calls or secret lookup.
+Normal runs check the AWS account and both table schemas. Profiles are cached
+as they arrive, then written in groups of up to 10 symbols with their membership
+pairs. Reruns use the same checkpoint and replay pending writes without fetching
+completed profiles again. The default rolling 24-hour budget is 200 HTTP attempts.
+Comma-separated profile requests are attempted once; unsupported or incomplete
+batches fall back to single-symbol calls. The checkpoint remembers this fallback.
+Unresolved symbols are skipped in both tables and reported. Writes upsert
+complete profile items and universe/symbol pairs without deleting stale data.
 Writes across the two tables are not atomic; interrupted runs can be rerun safely.
 
 The local AWS identity needs secretsmanager:GetSecretValue for the FMP secret,
@@ -32,6 +37,7 @@ include item writes. This script never creates tables or modifies IAM policies.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import logging
 import math
@@ -39,10 +45,10 @@ import os
 import random
 import re
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
-from email.utils import parsedate_to_datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote_plus, urlencode
@@ -74,6 +80,10 @@ PROFILE_STRINGS = (
 
 class IngestionError(RuntimeError):
     """An actionable ingestion failure, safe to report without provider bodies."""
+
+
+class UnresolvedSymbol(IngestionError):
+    """FMP could not identify one usable profile for a requested ticker."""
 
 
 class NoRedirects(HTTPRedirectHandler):
@@ -124,70 +134,252 @@ def load_universes(directory: Path, selected: list[str]) -> dict[str, set[str]]:
     return memberships
 
 
+class IngestionPaused(IngestionError):
+    """Progress is saved; the request allowance is exhausted or throttled."""
+
+
+class FMPAccessError(IngestionError):
+    def __init__(self, status: int):
+        self.status = status
+        super().__init__(f"FMP HTTP {status}; check endpoint access and subscription")
+
+
+def atomic_json(path: Path, payload: dict) -> None:
+    """Replace a private checkpoint atomically; never store credentials."""
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, default=str, allow_nan=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+class Checkpoint:
+    """Cache validated metadata and acknowledge only fully completed writes."""
+
+    def __init__(self, path: Path, region: str):
+        self.path = path
+        self.region = region
+        self.lock = None
+        self.data = {
+            "version": 1,
+            "account": ACCOUNT_ID,
+            "region": region,
+            "requests": [],
+            "profiles": {},
+            "unresolved": {},
+            "batch_disabled": False,
+        }
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.lock = self.path.with_suffix(".lock").open("a")
+        try:
+            fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if self.path.exists():
+                data = json.loads(self.path.read_text(encoding="utf-8"))
+                if (data.get("version"), data.get("account"), data.get("region")) != (
+                    1,
+                    ACCOUNT_ID,
+                    self.region,
+                ):
+                    raise IngestionError(
+                        "Checkpoint version, account, or region mismatch"
+                    )
+                if (
+                    not isinstance(data.get("requests"), list)
+                    or any(
+                        isinstance(t, bool)
+                        or not isinstance(t, (int, float))
+                        or not math.isfinite(t)
+                        for t in data["requests"]
+                    )
+                    or not isinstance(data.get("profiles"), dict)
+                    or not isinstance(data.get("unresolved"), dict)
+                ):
+                    raise IngestionError(
+                        "Invalid ingestion checkpoint; restore a valid copy"
+                    )
+                for symbol, record in data["profiles"].items():
+                    item = record["item"]
+                    if "marketCap" in item:
+                        item["marketCap"] = Decimal(item["marketCap"])
+                    # Revalidate disk data before allowing any writes.
+                    universes = item["universes"]
+                    if (
+                        not isinstance(universes, list)
+                        or not universes
+                        or any(u not in UNIVERSE_FILES for u in universes)
+                        or not isinstance(item["updatedAt"], str)
+                    ):
+                        raise IngestionError("Invalid cached profile memberships")
+                    record["item"] = profile_item(
+                        item, symbol, set(universes), item["updatedAt"]
+                    )
+                    if not isinstance(record.get("published"), list) or any(
+                        u not in universes for u in record["published"]
+                    ):
+                        raise IngestionError(
+                            "Invalid published memberships in checkpoint"
+                        )
+                self.data = data
+            return self
+        except BlockingIOError:
+            self.lock.close()
+            raise IngestionError("Another ingestion is using this checkpoint") from None
+        except BaseException:
+            self.lock.close()
+            raise
+
+    def __exit__(self, *args):
+        self.lock.close()
+
+    def save(self):
+        atomic_json(self.path, self.data)
+
+    def reserve_request(self, maximum: int):
+        now = time.time()
+        self.data["requests"] = [t for t in self.data["requests"] if t > now - 86400]
+        if len(self.data["requests"]) >= maximum:
+            raise IngestionPaused(
+                f"Local rolling 24-hour request budget ({maximum}) reached; rerun later"
+            )
+        # Reserve before sending, including retries and failed requests.
+        self.data["requests"].append(now)
+        self.save()
+
+    def remember(self, symbol: str, item: dict):
+        self.data["profiles"][symbol] = {"item": item, "published": []}
+        self.data["unresolved"].pop(symbol, None)
+        self.save()
+
+
 class FMPClient:
-    def __init__(self, api_key: str, requests_per_minute: float, attempts: int = 5):
+    def __init__(
+        self,
+        api_key: str,
+        requests_per_minute: float,
+        checkpoint: Checkpoint,
+        max_requests: int = 200,
+        batch: bool = True,
+        attempts: int = 5,
+    ):
         self.api_key = api_key
         self.interval = 60 / requests_per_minute
         self.attempts = attempts
         self.next_request = 0.0
         self.opener = build_opener(NoRedirects())
+        self.checkpoint = checkpoint
+        self.max_requests = max_requests
+        self.batch = batch and not checkpoint.data.get("batch_disabled", False)
+        self.requests_this_run = 0
 
-    def profile(self, symbol: str) -> dict:
+    def request(self, symbols: list[str]) -> list[dict]:
         url = "https://financialmodelingprep.com/stable/profile?" + urlencode(
-            {"symbol": symbol, "apikey": self.api_key}
+            {"symbol": ",".join(symbols), "apikey": self.api_key}
         )
+        failure = "request failed"
         for attempt in range(self.attempts):
             time.sleep(max(0, self.next_request - time.monotonic()))
+            self.checkpoint.reserve_request(self.max_requests)
+            self.requests_this_run += 1
             self.next_request = time.monotonic() + self.interval
-            retry_after = 0.0
             try:
                 request = Request(url, headers={"Accept": "application/json"})
                 with self.opener.open(request, timeout=30) as response:
                     body = response.read(1_048_577)
                 if len(body) > 1_048_576:
-                    raise IngestionError(f"FMP response too large for {symbol}")
+                    raise IngestionError("FMP response exceeds the profile size limit")
                 break
             except HTTPError as exc:
                 status = exc.code
-                header = exc.headers.get("Retry-After", "0")
                 exc.close()
-                if status not in {429, 500, 502, 503, 504}:
-                    raise IngestionError(
-                        f"FMP HTTP {status} for {symbol}; check API access and subscription"
+                if status == 429:
+                    raise IngestionPaused(
+                        "FMP HTTP 429: quota or rate limit reached; progress saved, rerun later"
                     ) from None
-                try:
-                    retry_after = float(header)
-                except ValueError:
-                    try:
-                        retry_after = (
-                            parsedate_to_datetime(header) - datetime.now(timezone.utc)
-                        ).total_seconds()
-                    except (ValueError, TypeError, OverflowError):
-                        retry_after = 0.0
-                if not math.isfinite(retry_after) or retry_after > 300:
-                    raise IngestionError(
-                        "FMP requested a long retry delay; retry the run later"
-                    )
-            except (URLError, TimeoutError, OSError):
-                # Never log the exception: it may contain the authenticated URL.
-                pass
+                if status not in {500, 502, 503, 504}:
+                    raise FMPAccessError(status) from None
+                failure = f"HTTP {status}"
+            except (URLError, TimeoutError, OSError) as exc:
+                # Exceptions can include the authenticated URL. Log only their type.
+                failure = type(exc).__name__
             if attempt + 1 == self.attempts:
-                raise IngestionError(
-                    f"FMP request failed after {self.attempts} attempts: {symbol}"
-                )
-            LOG.warning("Retrying FMP request for %s (attempt %s)", symbol, attempt + 2)
-            time.sleep(max(retry_after, min(2**attempt, 30) + random.random()))
+                raise IngestionError(f"FMP {failure} after {self.attempts} attempts")
+            LOG.warning("Retrying FMP after %s (attempt %s)", failure, attempt + 2)
+            time.sleep(min(2**attempt, 30) + random.random())
         try:
             payload = json.loads(body, parse_float=Decimal)
         except (ValueError, UnicodeError):
-            raise IngestionError(f"FMP returned invalid JSON for {symbol}") from None
-        if (
-            not isinstance(payload, list)
-            or len(payload) != 1
-            or not isinstance(payload[0], dict)
+            raise IngestionError("FMP returned invalid JSON") from None
+        if not isinstance(payload, list) or any(
+            not isinstance(p, dict) for p in payload
         ):
-            raise IngestionError(f"FMP did not return exactly one profile for {symbol}")
-        return payload[0]
+            # Do not print provider error bodies; they may echo the request URL.
+            raise IngestionError(
+                "FMP returned an invalid profile response or error object"
+            )
+        return payload
+
+    @staticmethod
+    def map_profiles(payload: list[dict], symbols: list[str]) -> dict[str, dict]:
+        profiles = {}
+        for item in payload:
+            raw = item.get("symbol")
+            if not isinstance(raw, str):
+                raise IngestionError("FMP returned a profile without a symbol")
+            symbol = normalize_symbol(raw)
+            if symbol not in symbols or symbol in profiles:
+                raise IngestionError(
+                    "FMP returned unexpected or duplicate profile symbols"
+                )
+            profiles[symbol] = item
+        return profiles
+
+    def disable_batch(self):
+        LOG.warning(
+            "FMP did not support a complete multi-symbol profile request; "
+            "using individual profile calls. Each HTTP attempt counts toward the budget."
+        )
+        self.batch = False
+        self.checkpoint.data["batch_disabled"] = True
+        self.checkpoint.save()
+
+    def profiles(self, symbols: list[str]):
+        """Yield verified batch results, then resolve missing symbols individually."""
+        found = {}
+        if self.batch and len(symbols) > 1:
+            try:
+                found = self.map_profiles(self.request(symbols), symbols)
+            except FMPAccessError as exc:
+                if exc.status not in {400, 402, 403, 404, 422}:
+                    raise
+                self.disable_batch()
+            else:
+                if len(found) != len(symbols):
+                    self.disable_batch()
+                else:
+                    LOG.info(
+                        "FMP returned all %s profiles in one request", len(symbols)
+                    )
+            for symbol, profile in found.items():
+                yield symbol, profile
+        for symbol in symbols:
+            if symbol in found:
+                continue
+            try:
+                single = self.map_profiles(self.request([symbol]), [symbol])
+            except FMPAccessError as exc:
+                if exc.status != 404:
+                    raise
+                single = {}
+            yield symbol, single.get(symbol)
 
 
 def profile_item(
@@ -199,7 +391,7 @@ def profile_item(
         not isinstance(returned_symbol, str)
         or normalize_symbol(returned_symbol) != symbol
     ):
-        raise IngestionError(
+        raise UnresolvedSymbol(
             f"FMP profile symbol does not match requested symbol {symbol}"
         )
     item = {"symbol": symbol, "universes": sorted(universes), "updatedAt": updated_at}
@@ -212,7 +404,7 @@ def profile_item(
         if value.strip():
             item[field] = value.strip()
     if "companyName" not in item:
-        raise IngestionError(f"FMP profile has no companyName for {symbol}")
+        raise UnresolvedSymbol(f"FMP profile has no companyName for {symbol}")
     value = profile.get("marketCap")
     if value is not None:
         if isinstance(value, bool) or not isinstance(value, (int, Decimal)):
@@ -326,6 +518,81 @@ def positive_int(value: str) -> int:
     return number
 
 
+def publish_cached(
+    checkpoint: Checkpoint,
+    dynamodb,
+    memberships: dict[str, set[str]],
+    symbols: list[str],
+) -> None:
+    """Replay pending writes without another provider call; acknowledge both tables."""
+    from boto3.dynamodb.types import TypeSerializer
+
+    profiles = []
+    records = []
+    for symbol in symbols:
+        record = checkpoint.data["profiles"].get(symbol)
+        if record is None:
+            continue
+        item = record["item"]
+        desired = set(item["universes"]) | memberships[symbol]
+        item["universes"] = sorted(desired)
+        if set(record["published"]) != desired:
+            profiles.append(item)
+            records.append(record)
+    if not profiles:
+        return
+    # Save new membership intent before attempting either table.
+    checkpoint.save()
+    pairs = [
+        {"universe": u, "symbol": item["symbol"]}
+        for item in profiles
+        for u in item["universes"]
+    ]
+    serializer = TypeSerializer()
+    for item in profiles + pairs:
+        serializer.serialize(item)
+    write_items(dynamodb, METADATA_TABLE, profiles)
+    write_items(dynamodb, MEMBERSHIP_TABLE, pairs)
+    for record in records:
+        record["published"] = list(record["item"]["universes"])
+    checkpoint.save()
+    LOG.info("Saved %s profiles and %s membership pairs", len(profiles), len(pairs))
+
+
+def coverage(
+    checkpoint: Checkpoint, memberships: dict[str, set[str]], selected: list[str]
+) -> dict:
+    result = {}
+    for universe in selected:
+        symbols = [s for s, universes in memberships.items() if universe in universes]
+        uploaded = sum(
+            universe in checkpoint.data["profiles"].get(s, {}).get("published", [])
+            for s in symbols
+        )
+        cached = sum(s in checkpoint.data["profiles"] for s in symbols)
+        skipped = sum(s in checkpoint.data["unresolved"] for s in symbols)
+        pending = len(symbols) - uploaded - skipped
+        result[universe] = {
+            "total": len(symbols),
+            "uploaded": uploaded,
+            "cached": cached,
+            "skipped": skipped,
+            "pending": pending,
+        }
+        if pending == 0:
+            LOG.info("%s done: %s uploaded, %s skipped", universe, uploaded, skipped)
+        else:
+            LOG.info(
+                "%s progress: %s/%s uploaded, %s skipped, %s pending",
+                universe,
+                uploaded,
+                len(symbols),
+                skipped,
+                pending,
+            )
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -343,146 +610,202 @@ def main(argv: list[str] | None = None) -> int:
         "--profile", help="AWS profile; otherwise use the default credential chain"
     )
     parser.add_argument("--region", default="us-east-1")
+    parser.add_argument("--fmp-secret-id", default=FMP_SECRET_ID)
+    parser.add_argument("--requests-per-minute", type=positive_float, default=60.0)
     parser.add_argument(
-        "--fmp-secret-id",
-        default=FMP_SECRET_ID,
-        help="Secrets Manager secret name or ARN (default: jimmy-dev-fmp-api-key)",
-    )
-    parser.add_argument(
-        "--requests-per-minute",
-        type=positive_float,
-        default=60.0,
-        help="FMP request rate; set within your subscription's limits (default: 60)",
-    )
-    parser.add_argument(
-        "--limit",
+        "--batch-size",
         type=positive_int,
-        help="Ingest only the first N unique sorted symbols",
+        default=10,
+        help="Symbols per fetch/write group (1 to 10; default: 10)",
+    )
+    parser.add_argument(
+        "--single-profile-requests",
+        action="store_true",
+        help="Skip the comma-separated profile capability probe",
+    )
+    parser.add_argument(
+        "--max-requests-per-day",
+        type=positive_int,
+        default=200,
+        help="Persistent rolling 24-hour HTTP-attempt budget (default: 200)",
+    )
+    parser.add_argument(
+        "--checkpoint",
+        type=Path,
+        default=Path(__file__).resolve().parent
+        / ".ingestion_state"
+        / "checkpoint.json",
+    )
+    parser.add_argument(
+        "--limit", type=positive_int, help="Process first N unique sorted symbols"
+    )
+    parser.add_argument("--unresolved-report", type=Path)
+    parser.add_argument(
+        "--retry-unresolved",
+        action="store_true",
+        help="Retry previously unresolved symbols in this selection",
     )
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument(
-        "--validate-inputs",
-        action="store_true",
-        help="Check local files only; no API calls",
-    )
+    mode.add_argument("--validate-inputs", action="store_true")
     mode.add_argument(
         "--dry-run",
         action="store_true",
-        help="Fetch the secret and FMP profiles without accessing DynamoDB",
+        help="Fetch/cache profiles without accessing DynamoDB",
     )
     args = parser.parse_args(argv)
+    if args.batch_size > 10:
+        parser.error("--batch-size must be between 1 and 10")
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     api_key = os.environ.get("FMP_API_KEY", "").strip()
-    writes_started = False
     try:
-        memberships = load_universes(
-            args.input_dir, list(dict.fromkeys(args.universe or UNIVERSE_FILES))
-        )
+        selected = list(dict.fromkeys(args.universe or UNIVERSE_FILES))
+        memberships = load_universes(args.input_dir, selected)
+        symbols = sorted(memberships)
         if args.limit:
-            memberships = {
-                symbol: memberships[symbol]
-                for symbol in sorted(memberships)[: args.limit]
-            }
-        pairs = [
-            {"universe": universe, "symbol": symbol}
-            for symbol in sorted(memberships)
-            for universe in sorted(memberships[symbol])
-        ]
+            symbols = symbols[: args.limit]
         LOG.info(
-            "Selected %s unique symbols and %s membership pairs",
-            len(memberships),
-            len(pairs),
+            "Selected %s unique symbols; groups of %s", len(symbols), args.batch_size
         )
         if args.validate_inputs:
             print(
                 json.dumps(
                     {
-                        "symbols": len(memberships),
-                        "membership_pairs": len(pairs),
+                        "symbols": len(symbols),
+                        "membership_pairs": sum(len(memberships[s]) for s in symbols),
                         "mode": "inputs-only",
                     }
                 )
             )
             return 0
-        if not api_key:
-            api_key = load_fmp_api_key(args.profile, args.region, args.fmp_secret_id)
-        dynamodb = None if args.dry_run else connect_dynamodb(args.profile, args.region)
-        client = FMPClient(api_key, args.requests_per_minute)
-        profiles = []
-        for symbol in sorted(memberships):
-            profile = client.profile(symbol)
-            updated_at = (
-                datetime.now(timezone.utc)
-                .isoformat(timespec="seconds")
-                .replace("+00:00", "Z")
+        report = args.unresolved_report or args.input_dir / "unresolved_symbols.json"
+        if report.resolve() == args.checkpoint.resolve():
+            raise IngestionError("Report and checkpoint must be different files")
+        with Checkpoint(args.checkpoint, args.region) as checkpoint:
+            if args.retry_unresolved:
+                for symbol in symbols:
+                    checkpoint.data["unresolved"].pop(symbol, None)
+                checkpoint.save()
+            # Resolve the secret lazily: cached-only resume does not call FMP or Secrets Manager.
+            client = None
+            dynamodb = (
+                None if args.dry_run else connect_dynamodb(args.profile, args.region)
             )
-            profiles.append(
-                profile_item(profile, symbol, memberships[symbol], updated_at)
-            )
-            if len(profiles) % 100 == 0:
-                LOG.info("Fetched %s/%s profiles", len(profiles), len(memberships))
-        if not args.dry_run:
-            from boto3.dynamodb.types import TypeSerializer
-
-            serializer = TypeSerializer()
-            # Validate every item before either table is modified.
-            for item in profiles + pairs:
-                serializer.serialize(item)
-            writes_started = True
-            write_items(dynamodb, METADATA_TABLE, profiles)
-            for universe in dict.fromkeys(args.universe or UNIVERSE_FILES):
-                universe_pairs = [
-                    pair for pair in pairs if pair["universe"] == universe
-                ]
-                if not universe_pairs:
-                    continue
-                write_items(dynamodb, MEMBERSHIP_TABLE, universe_pairs)
-                LOG.info(
-                    "%s done: %s profiles and %s membership pairs written",
-                    universe,
-                    len(universe_pairs),
-                    len(universe_pairs),
-                )
-        else:
-            for universe in dict.fromkeys(args.universe or UNIVERSE_FILES):
-                count = sum(pair["universe"] == universe for pair in pairs)
-                if count:
+            status = "complete"
+            exit_code = 0
+            try:
+                for offset in range(0, len(symbols), args.batch_size):
+                    group = symbols[offset : offset + args.batch_size]
+                    # Repair a prior partial write before spending more provider calls.
+                    if not args.dry_run:
+                        publish_cached(checkpoint, dynamodb, memberships, group)
+                    pending = [
+                        s
+                        for s in group
+                        if s not in checkpoint.data["profiles"]
+                        and s not in checkpoint.data["unresolved"]
+                    ]
+                    if not pending:
+                        continue
+                    if client is None:
+                        if not api_key:
+                            api_key = load_fmp_api_key(
+                                args.profile, args.region, args.fmp_secret_id
+                            )
+                        client = FMPClient(
+                            api_key,
+                            args.requests_per_minute,
+                            checkpoint,
+                            args.max_requests_per_day,
+                            batch=not args.single_profile_requests,
+                        )
+                    try:
+                        for symbol, profile in client.profiles(pending):
+                            try:
+                                if profile is None:
+                                    raise UnresolvedSymbol(
+                                        f"FMP has no profile for {symbol}"
+                                    )
+                                item = profile_item(
+                                    profile,
+                                    symbol,
+                                    memberships[symbol],
+                                    datetime.now(timezone.utc)
+                                    .isoformat(timespec="seconds")
+                                    .replace("+00:00", "Z"),
+                                )
+                            except UnresolvedSymbol as exc:
+                                checkpoint.data["unresolved"][symbol] = str(exc)
+                                checkpoint.save()
+                                LOG.warning(
+                                    "Skipping unresolved symbol %s: %s", symbol, exc
+                                )
+                            else:
+                                checkpoint.remember(symbol, item)
+                    finally:
+                        # A 429, interrupt, or a later bad symbol cannot discard earlier successes.
+                        if not args.dry_run:
+                            publish_cached(checkpoint, dynamodb, memberships, group)
                     LOG.info(
-                        "%s dry run done: %s profiles validated; no writes",
-                        universe,
-                        count,
+                        "Processed %s/%s selected symbols",
+                        min(offset + len(group), len(symbols)),
+                        len(symbols),
                     )
-        print(
-            json.dumps(
-                {
-                    "profiles": len(profiles),
-                    "membership_pairs": len(pairs),
-                    "mode": "dry-run" if args.dry_run else "written",
-                }
-            )
-        )
-        return 0
+            except IngestionPaused as exc:
+                LOG.warning("%s", exc)
+                status, exit_code = "paused", 2
+            except BaseException:
+                status = "failed"
+                raise
+            finally:
+                skipped = [
+                    {
+                        "symbol": symbol,
+                        "universes": sorted(memberships[symbol]),
+                        "reason": reason,
+                    }
+                    for symbol, reason in sorted(checkpoint.data["unresolved"].items())
+                    if symbol in memberships
+                ]
+                atomic_json(
+                    report,
+                    {
+                        "updatedAt": datetime.now(timezone.utc).isoformat(
+                            timespec="seconds"
+                        ),
+                        "universes": selected,
+                        "skipped": skipped,
+                    },
+                )
+                print(
+                    json.dumps(
+                        {
+                            "status": status,
+                            "selected_symbols": len(symbols),
+                            "mode": "dry-run" if args.dry_run else "written",
+                            "requests_this_run": client.requests_this_run
+                            if client
+                            else 0,
+                            "coverage": coverage(checkpoint, memberships, selected),
+                            "checkpoint": str(args.checkpoint),
+                            "unresolved_report": str(report),
+                        }
+                    )
+                )
+            return exit_code
+    except KeyboardInterrupt:
+        LOG.error("Interrupted; validated profiles are checkpointed. Rerun to resume.")
+        return 130
     except Exception as exc:
-        # Keep credential-bearing URLs and provider bodies out of error logs.
         message = str(exc)
         if api_key:
             message = message.replace(api_key, "[redacted]").replace(
                 quote_plus(api_key), "[redacted]"
             )
         LOG.error("%s", message)
-        if writes_started:
-            LOG.error(
-                "Partial writes may have occurred. Rerun after resolving the error; no rows were deleted."
-            )
-        return 1
-    except KeyboardInterrupt:
         LOG.error(
-            "Interrupted%s",
-            "; partial writes may have occurred"
-            if writes_started
-            else " before writes",
+            "Progress is retained; partial writes can be replayed by rerunning with the same checkpoint."
         )
-        return 130
+        return 1
 
 
 if __name__ == "__main__":

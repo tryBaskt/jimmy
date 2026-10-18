@@ -82,12 +82,14 @@ The local ingestion script reads the value at runtime using the local AWS profil
 
 The same dev workflow now runs these jobs in order:
 
-`CI` → **provisioning infra** → **provisioning backend** → **provisioning frontend**
+`CI` → **provisioning infra** → **provisioning api** → **provisioning frontend**
 
 The original root still manages DynamoDB and the FMP secret metadata. The child
-roots [`backend/`](backend/README.md) and [`frontend/`](frontend/README.md) own
+roots [`api/`](api/README.md) and [`frontend/`](frontend/README.md) own
 separate application resources and state files; Terraform does not recursively
-apply child directories. No existing resources or state addresses are moved.
+apply child directories. The API root still uses `dev/backend/terraform.tfstate`
+and the same resource addresses and AWS names, so moving its folder does not
+replace existing resources.
 Every job uses `jimmy-dev-github-actions` and the protected `dev` environment.
 The final job writes the deployed frontend URL to the workflow summary.
 

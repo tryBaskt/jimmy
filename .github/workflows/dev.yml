@@ -128,8 +128,8 @@ jobs:
             echo "Terraform state: s3://${STATE_BUCKET}/dev/terraform.tfstate"
           } >> "${GITHUB_STEP_SUMMARY}"
 
-  provisioning_backend:
-    name: provisioning backend
+  provisioning_api:
+    name: provisioning api
     needs: provisioning_infra
     if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-24.04
@@ -144,7 +144,7 @@ jobs:
       AWS_REGION: us-east-1
       TF_IN_AUTOMATION: 'true'
       TF_INPUT: 'false'
-      TF_VAR_package_path: ${{ github.workspace }}/backend/build/backend.zip
+      TF_VAR_package_path: ${{ github.workspace }}/api/build/api.zip
     steps:
       - name: Check out repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -156,9 +156,9 @@ jobs:
           python-version: '3.14'
       - name: Build Linux Lambda package
         run: |
-          python -m pip install --no-compile -r backend/requirements-lambda.txt --target backend/build/package
-          cp -R backend/app backend/build/package/app
-          python -c "import shutil; shutil.make_archive('backend/build/backend', 'zip', 'backend/build/package')"
+          python -m pip install --no-compile -r api/requirements-lambda.txt --target api/build/package
+          cp -R api/app api/build/package/app
+          python -c "import shutil; shutil.make_archive('api/build/api', 'zip', 'api/build/package')"
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
         with:
@@ -170,28 +170,28 @@ jobs:
           role-to-assume: arn:aws:iam::499133675835:role/jimmy-dev-github-actions
           aws-region: ${{ env.AWS_REGION }}
           allowed-account-ids: '499133675835'
-          role-session-name: jimmy-dev-backend-${{ github.run_id }}
+          role-session-name: jimmy-dev-api-${{ github.run_id }}
           unset-current-credentials: true
-      - name: Provision backend
-        working-directory: infra/dev/backend
+      - name: Provision API
+        working-directory: infra/dev/api
         run: |
           terraform init -input=false -lockfile=readonly
           terraform validate
-          terraform plan -input=false -lock-timeout=5m -out=backend.tfplan
-          terraform apply -input=false -lock-timeout=5m backend.tfplan
-      - name: Verify backend and publish its URL
+          terraform plan -input=false -lock-timeout=5m -out=api.tfplan
+          terraform apply -input=false -lock-timeout=5m api.tfplan
+      - name: Verify API and publish its URL
         id: outputs
-        working-directory: infra/dev/backend
+        working-directory: infra/dev/api
         run: |
           api_url="$(terraform output -raw api_url)"
           curl --fail --silent --show-error --retry 12 --retry-all-errors --retry-delay 5 \
-            "${api_url}/api/health" | python -c 'import json,sys; assert json.load(sys.stdin) == {"status":"ok","service":"jimmy-backend"}'
+            "${api_url}/api/health" | python -c 'import json,sys; assert json.load(sys.stdin) == {"status":"ok","service":"jimmy-api"}'
           echo "api_url=${api_url}" >> "${GITHUB_OUTPUT}"
-          echo "Backend: ${api_url}/api/health" >> "${GITHUB_STEP_SUMMARY}"
+          echo "API: ${api_url}/api/health" >> "${GITHUB_STEP_SUMMARY}"
 
   provisioning_frontend:
     name: provisioning frontend
-    needs: provisioning_backend
+    needs: provisioning_api
     if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -203,7 +203,7 @@ jobs:
       AWS_REGION: us-east-1
       TF_IN_AUTOMATION: 'true'
       TF_INPUT: 'false'
-      TF_VAR_api_url: ${{ needs.provisioning_backend.outputs.api_url }}
+      TF_VAR_api_url: ${{ needs.provisioning_api.outputs.api_url }}
     steps:
       - name: Check out repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -257,5 +257,5 @@ jobs:
           curl --fail --silent --show-error --retry 12 --retry-all-errors --retry-delay 5 \
             "${frontend_url}/" --output /dev/null
           curl --fail --silent --show-error --retry 12 --retry-all-errors --retry-delay 5 \
-            "${frontend_url}/api/health" | python3 -c 'import json,sys; assert json.load(sys.stdin) == {"status":"ok","service":"jimmy-backend"}'
+            "${frontend_url}/api/health" | python3 -c 'import json,sys; assert json.load(sys.stdin) == {"status":"ok","service":"jimmy-api"}'
           echo "Frontend: ${frontend_url}" >> "${GITHUB_STEP_SUMMARY}"

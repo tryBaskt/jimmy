@@ -51,7 +51,7 @@ those management statements use ID wildcards in us-east-1 or this account. API
 Gateway management is broader than a name prefix because ARNs contain generated
 IDs, not names. All bucket/function/role names are exact. CloudFront OAC creation
 and log-group discovery require `Resource: "*"`. These are deployment permissions,
-not permissions granted to the running backend.
+not permissions granted to the running API.
 
 From an authenticated administrator session, apply the reviewed policies:
 
