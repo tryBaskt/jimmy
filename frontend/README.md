@@ -15,15 +15,16 @@ Open http://127.0.0.1:5173. When starting only the frontend, start FastAPI separ
 using the API README.
 Vite proxies `/api/*` to http://127.0.0.1:8000. `FRONTEND_PORT` and `API_PORT`
 can override the local listening/proxy ports. The page accepts a strategy prompt
-and displays the monthly backtest, SPY comparison, and stock selections.
-The user chooses a 1–12 month lookback for each month's stock ranking. Bedrock
-translates the prompt into validated price signals: trailing return, realized
-volatility, drawdown, distance from average price, or beta to SPY, each ranked
-highest or lowest. Up to three signals can be combined. Fundamental value
-strategies need historical point-in-time fundamental data and are not yet
-available. There is no separate training/holdout split. The research endpoint is enabled by the root local
-launcher and uses the AWS profile from the shell; no credentials belong in
-frontend code. Currently it supports monthly, equal-weight S&P 500 momentum.
+and displays the backtest, SPY comparison, and dated positions with directions
+and weights. The user chooses a 1–12 month lookback. Bedrock translates an
+explicit price-based hypothesis into one supported signal, then makes a
+portfolio decision from prior-close signals at each monthly or quarterly
+rebalance. VectorBT replays those saved decisions with trading costs.
+Supported signals are trailing return, realized volatility, drawdown, distance
+from average price, and beta to SPY. Strategies needing point-in-time
+fundamentals or unstructured documents are not yet available. Market-cap weights
+use Yahoo's historical share-count estimates. There is no separate training/holdout split. The strategy endpoint
+uses the AWS profile from the shell; no credentials belong in frontend code.
 
 `npm run lint` checks source; `npm run build` checks TypeScript and creates `dist/`.
 `npm run preview` previews static output only; it does not proxy API requests.
@@ -31,5 +32,5 @@ frontend code. Currently it supports monthly, equal-weight S&P 500 momentum.
 In dev AWS, the provisioning frontend job uploads `dist/` to private S3 and
 CloudFront serves the app over HTTPS. CloudFront forwards `/api/*` to API Gateway,
 so no environment-specific API URL is embedded in JavaScript.
-The hosted research form remains disabled because the public Lambda does not
+The hosted strategy form remains disabled because the public Lambda does not
 run long backtests or have research-data permissions yet.

@@ -7,7 +7,7 @@
   },
   "scripts": {
     "dev": "concurrently --kill-others \"npm:dev:*\"",
-    "dev:api": "JIMMY_LOCAL_RESEARCH=1 ./venv/bin/python -m uvicorn app.main:app --app-dir api --reload --reload-dir api --reload-dir packages --host 127.0.0.1 --port ${API_PORT:-8000}",
+    "dev:api": "JIMMY_LOCAL_STRATEGY=1 ./venv/bin/python -m uvicorn app.main:app --app-dir api --reload --reload-dir api --reload-dir packages --host 127.0.0.1 --port ${API_PORT:-8000}",
     "dev:frontend": "npm --prefix frontend run dev"
   },
   "devDependencies": {

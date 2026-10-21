@@ -7,7 +7,7 @@ AI-native quantitative research platform.
 - `frontend/`: React application.
 - `api/`: FastAPI routes and the Lambda entry point for HTTP requests.
 - `workers/`: independently runnable background jobs, including the local strategy research runner.
-- `packages/`: reusable Python code. `clients/` contains market-data, DynamoDB, and simulation adapters; `agentic_workflows/` contains the strategy research logic.
+- `packages/`: reusable Python code. `agent_harness/` provides bounded model and tool execution; `agents/strategy_agent/` contains the trading plan, dated decisions, market-data tools, and deterministic replay.
 - `batch_scripts/`: locally runnable data ingestion jobs.
 - `infra/dev/` and `infra/prod/`: infrastructure for each environment.
 
@@ -16,7 +16,7 @@ The existing AWS API resources retain their `jimmy-dev-backend` names and Terraf
 state key while the code moves to `api/`, so this layout change does not replace them.
 
 The strategy research runner is a finite local job. See [its instructions](workers/strategy_research/README.md)
-for the Bedrock-backed momentum example; it is not started by `npm run dev`.
+for the Bedrock-backed strategy test; it is not started by `npm run dev`.
 
 ## Run all local services
 
@@ -40,7 +40,7 @@ On a fresh checkout, install dependencies once (Node 24 and Python 3.14):
 ```sh
 python3 -m venv venv
 venv/bin/python -m pip install -r api/requirements-dev.txt
-venv/bin/python -m pip install -r packages/clients/requirements.txt
+venv/bin/python -m pip install -r packages/agents/strategy_agent/requirements.txt
 npm ci
 npm --prefix frontend ci
 ```
@@ -72,3 +72,4 @@ must handle readiness/reconnection themselves. Keep finite batch jobs outside
 
 ## TODO
 DynamoDB contains current universe membership, which introduces survivorship bias into historical results.
+If stocks dont have a market cap, we take the unused weight, and divide it by the number of stocks without market caps

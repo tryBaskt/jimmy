@@ -1,1 +1,0 @@
-"""Local strategy research runner."""

@@ -80,8 +80,8 @@ jobs:
       - name: Test API and Lambda handler
         run: python -m pytest -c api/pytest.ini api/tests
 
-  clients:
-    name: Validate shared Python clients
+  strategy_agent:
+    name: Validate strategy agent
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -93,10 +93,10 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.14'
-      - name: Install client dependencies
-        run: python -m pip install -r packages/clients/requirements.txt pytest==9.1.1
-      - name: Test shared clients and research workflow
-        run: python -m pytest packages/clients/tests packages/agentic_workflows/strategy_and_research/tests -q
+      - name: Install strategy dependencies
+        run: python -m pip install -r packages/agents/strategy_agent/requirements.txt pytest==9.1.1
+      - name: Test agent harness and strategy agent
+        run: python -m pytest packages/agent_harness/tests packages/agents/strategy_agent/tests -q
 
   frontend:
     name: Validate React frontend
