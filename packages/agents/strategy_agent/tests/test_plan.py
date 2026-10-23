@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import Mock
 
-from packages.agents.strategy_agent.plan import BedrockStrategyAgent, StrategyPlan
+from packages.agents.strategy_agent.plan import BedrockStrategyAgent, PLAN_TOOL, StrategyPlan
 
 
 def model_plan(**overrides):
@@ -9,7 +9,7 @@ def model_plan(**overrides):
         "supported": True, "unsupported_reason": "",
         "hypothesis": "Buy the 10 strongest prior performers",
         "universe": "SP500", "top_n": 10, "rebalance": "monthly",
-        "metric": "trailing_return", "rank_direction": "highest",
+        "metric": "last(close) / first(close) - 1", "rank_direction": "highest",
         "weighting": "equal", "allow_short": False,
         "fees_bps": 5, "slippage_bps": 5,
     }
@@ -18,7 +18,7 @@ def model_plan(**overrides):
 
 def test_explicit_hypothesis_is_a_fixed_plan():
     plan = StrategyPlan.from_model(model_plan(), 3)
-    assert plan.ranking_rule() == "highest price return over 3 months"
+    assert plan.ranking_rule() == "highest last(close) / first(close) - 1 over 3 months"
     assert plan.to_dict()["top_n"] == 10
 
 
@@ -44,7 +44,7 @@ def test_unsupported_plan_needs_only_a_reason():
 def test_market_weight_prompt_accepts_missing_optional_model_fields():
     agent = BedrockStrategyAgent(session=Mock(), model_id="test")
     agent._ask = lambda *args: {
-        "metric": "trailing_return",
+        "metric": "last(close) / first(close) - 1",
         "rank_direction": "highest",
         "weighting": "market_cap",
     }
@@ -64,7 +64,55 @@ def test_complete_random_hypothesis_uses_generic_sampling_step():
     }
     plan = agent.plan("Choose 15 S&P 500 stocks randomly each month", 2)
     assert plan.selection_steps == ({"operation": "sample"},)
+    assert plan.metric == ""
     assert plan.ranking_rule() == "random sample"
+    assert "metric" not in PLAN_TOOL["toolSpec"]["inputSchema"]["json"]["required"]
+
+
+def test_non_return_signal_does_not_require_trailing_return():
+    agent = BedrockStrategyAgent(session=Mock(), model_id="test")
+    agent._ask = lambda *args: {
+        "top_n": 10,
+        "features": [{
+            "id": "risk", "source": "price_history", "description": "return volatility",
+            "instruction": "std(pct_change(close))",
+        }],
+        "selection_steps": [{
+            "operation": "rank", "feature": "risk", "direction": "lowest",
+        }],
+    }
+    plan = agent.plan("Buy the ten least volatile S&P 500 stocks each month", 3)
+    assert plan.metric == ""
+    assert plan.ranking_rule() == "lowest return volatility"
+
+
+def test_rank_uses_validated_top_level_metric_when_model_omits_step_feature():
+    agent = BedrockStrategyAgent(session=Mock(), model_id="test")
+    agent._ask = lambda *args: {
+        "metric": "growth", "rank_direction": "highest",
+        "features": [{
+            "id": "growth", "source": "price_history", "description": "prior price growth",
+            "instruction": "last(close) / first(close) - 1",
+        }],
+        "selection_steps": [{"operation": "rank", "direction": "highest"}],
+    }
+    plan = agent.plan("Buy the strongest momentum stocks monthly", 3)
+    assert plan.selection_steps == ({
+        "operation": "rank", "feature": "growth", "direction": "highest",
+    },)
+    assert plan.ranking_rule() == "highest prior price growth"
+
+
+def test_plan_can_describe_a_future_document_feature_without_a_code_change():
+    plan = StrategyPlan.from_model(model_plan(
+        metric="tone", features=[{
+            "id": "tone", "source": "uploaded_documents",
+            "description": "management tone before rebalance",
+            "instruction": "Score each company's latest available earnings discussion",
+        }],
+    ), 3)
+    assert plan.features[0]["source"] == "uploaded_documents"
+    assert plan.ranking_rule() == "highest management tone before rebalance over 3 months"
 
 
 def test_selection_steps_reject_unavailable_operations():
