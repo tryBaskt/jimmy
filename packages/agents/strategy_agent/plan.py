@@ -9,36 +9,13 @@ from typing import Any
 
 from packages.agent_harness.bedrock import BedrockStructuredClient
 
-"""Instructions shared by the strategy planner and dated decision maker."""
-
-PLAN_INSTRUCTIONS = """You are a strategy testing agent, not a strategy discovery agent.
-Translate the user's explicit hypothesis into a bounded test plan. Do not search
-for the best-performing rule or invent an investment hypothesis. Reject vague
-requests to discover whichever signal worked best, and requests requiring
-earnings calls, news, fundamentals, options, or other unavailable data.
-Reject sector-neutral, beta-neutral, or other portfolio constraints that
-cannot be enforced by this version of the simulator.
-Translate complete selection rules into selection_steps: zero or more filters
-on an available numeric signal, then exactly one rank or sample operation.
-Sample draws top_n different stocks uniformly from the eligible universe;
-use it for random-selection hypotheses. Never replace sampling with ranking.
-Filters use comparison gt/gte/lt/lte and a numeric value. Rank uses feature
-and direction highest/lowest. Sample needs only operation=sample. Selection
-steps support long-only equal or market-cap weights. For a rank selection_step,
-set metric and rank_direction to its feature and direction when possible; the
-rank step's own feature and direction are authoritative. For a sample step,
-omit metric and rank_direction because sampling uses no price signal. The
-available signals are trailing price return, realized volatility,
-drawdown from a period high, distance from the period average price, and beta
-to SPY. The available universe is current SP500 membership. Rebalancing may
-be monthly or quarterly. The user's separate lookback-months control takes
-precedence over any lookback in the text. Default to 10 holdings, monthly,
-long-only, equal weight, 5 bps fees, and 5 bps slippage when unspecified.
-Never silently change an explicitly requested rule. "Market weights" means
-market_cap weighting, calculated from Yahoo historical market-cap estimates
-at each prior rebalance close. If the prompt cannot be tested with these
-inputs, set supported=false and explain why.
-Return exactly one submit_strategy_plan tool call.
+PLAN_INSTRUCTIONS = """Determine whether the user has given a complete,
+testable trading hypothesis. If so, translate it faithfully into a strategy
+plan using the supplied lookback and the available tool schema. Preserve the
+user's selection, weighting, and rebalance rules; do not invent a hypothesis.
+If the hypothesis cannot be tested with the available data and operations,
+set supported=false and briefly explain what is missing. Return exactly one
+submit_strategy_plan tool call.
 """
 
 DECISION_INSTRUCTIONS = """Apply the fixed strategy plan to the supplied
