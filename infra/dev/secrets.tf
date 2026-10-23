@@ -1,6 +1,6 @@
 resource "aws_secretsmanager_secret" "fmp_api_key" {
   name                    = "jimmy-dev-fmp-api-key"
-  description             = "Financial Modeling Prep API key for local Jimmy stock ingestion"
+  description             = "Financial Modeling Prep API key for Jimmy stock ingestion"
   recovery_window_in_days = 30
 
   tags = {

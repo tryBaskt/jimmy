@@ -10,14 +10,18 @@
         "dynamodb:DescribeTable",
         "dynamodb:UpdateTable",
         "dynamodb:DescribeContinuousBackups",
+        "dynamodb:UpdateContinuousBackups",
         "dynamodb:DescribeTimeToLive",
+        "dynamodb:UpdateTimeToLive",
         "dynamodb:ListTagsOfResource",
         "dynamodb:TagResource",
         "dynamodb:UntagResource"
       ],
       "Resource": [
         "arn:aws:dynamodb:us-east-1:499133675835:table/jimmy-dev-stock-metadata",
-        "arn:aws:dynamodb:us-east-1:499133675835:table/jimmy-dev-stock-universe-membership"
+        "arn:aws:dynamodb:us-east-1:499133675835:table/jimmy-dev-stock-universe-membership",
+        "arn:aws:dynamodb:us-east-1:499133675835:table/jimmy-dev-user-sessions",
+        "arn:aws:dynamodb:us-east-1:499133675835:table/jimmy-dev-strategy-jobs"
       ]
     }
   ]

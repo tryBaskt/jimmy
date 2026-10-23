@@ -1,0 +1,11 @@
+.git
+.github
+.terraform
+**/.terraform
+**/__pycache__
+venv
+frontend
+infra
+api
+batch_scripts
+**/*.ipynb

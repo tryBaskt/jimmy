@@ -1,0 +1,110 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ManageStrategyQueues",
+      "Effect": "Allow",
+      "Action": ["sqs:CreateQueue", "sqs:DeleteQueue", "sqs:GetQueueAttributes", "sqs:SetQueueAttributes", "sqs:ListQueueTags", "sqs:TagQueue", "sqs:UntagQueue"],
+      "Resource": [
+        "arn:aws:sqs:us-east-1:499133675835:jimmy-dev-strategy-jobs",
+        "arn:aws:sqs:us-east-1:499133675835:jimmy-dev-strategy-jobs-dlq"
+      ]
+    },
+    {
+      "Sid": "ManageDevResultBucket",
+      "Effect": "Allow",
+      "Action": ["s3:CreateBucket", "s3:DeleteBucket", "s3:GetBucketLocation", "s3:ListBucket", "s3:GetBucketPublicAccessBlock", "s3:PutBucketPublicAccessBlock", "s3:GetEncryptionConfiguration", "s3:PutEncryptionConfiguration", "s3:GetLifecycleConfiguration", "s3:PutLifecycleConfiguration", "s3:GetBucketTagging", "s3:PutBucketTagging", "s3:GetBucketVersioning", "s3:GetBucketLogging", "s3:GetBucketPolicy", "s3:PutBucketPolicy", "s3:DeleteBucketPolicy", "s3:GetBucketAcl", "s3:GetBucketCORS", "s3:GetBucketWebsite", "s3:GetAccelerateConfiguration", "s3:GetBucketRequestPayment", "s3:GetReplicationConfiguration", "s3:GetBucketObjectLockConfiguration"],
+      "Resource": "arn:aws:s3:::jimmy-dev-strategy-results-499133675835"
+    },
+    {
+      "Sid": "ManageWorkerRepository",
+      "Effect": "Allow",
+      "Action": ["ecr:CreateRepository", "ecr:DeleteRepository", "ecr:DescribeRepositories", "ecr:ListTagsForResource", "ecr:TagResource", "ecr:UntagResource", "ecr:GetLifecyclePolicy", "ecr:PutLifecyclePolicy", "ecr:DeleteLifecyclePolicy", "ecr:GetRepositoryPolicy", "ecr:DescribeImages", "ecr:BatchCheckLayerAvailability", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage"],
+      "Resource": "arn:aws:ecr:us-east-1:499133675835:repository/jimmy-dev-strategy-worker"
+    },
+    {
+      "Sid": "LogInToDevEcr",
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*"
+    },
+    {
+      "Sid": "ManageDevCognito",
+      "Effect": "Allow",
+      "Action": ["cognito-idp:CreateUserPool", "cognito-idp:DescribeUserPool", "cognito-idp:UpdateUserPool", "cognito-idp:DeleteUserPool", "cognito-idp:CreateUserPoolClient", "cognito-idp:DescribeUserPoolClient", "cognito-idp:UpdateUserPoolClient", "cognito-idp:DeleteUserPoolClient", "cognito-idp:CreateUserPoolDomain", "cognito-idp:DescribeUserPoolDomain", "cognito-idp:UpdateUserPoolDomain", "cognito-idp:DeleteUserPoolDomain", "cognito-idp:CreateManagedLoginBranding", "cognito-idp:DescribeManagedLoginBranding", "cognito-idp:DescribeManagedLoginBrandingByClient", "cognito-idp:UpdateManagedLoginBranding", "cognito-idp:DeleteManagedLoginBranding", "cognito-idp:ListTagsForResource", "cognito-idp:TagResource", "cognito-idp:UntagResource"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "WorkerNetwork",
+      "Effect": "Allow",
+      "Action": ["ec2:CreateVpc", "ec2:DeleteVpc", "ec2:ModifyVpcAttribute", "ec2:DescribeVpcs", "ec2:CreateSubnet", "ec2:DeleteSubnet", "ec2:DescribeSubnets", "ec2:ModifySubnetAttribute", "ec2:CreateInternetGateway", "ec2:DeleteInternetGateway", "ec2:AttachInternetGateway", "ec2:DetachInternetGateway", "ec2:DescribeInternetGateways", "ec2:CreateRouteTable", "ec2:DeleteRouteTable", "ec2:DescribeRouteTables", "ec2:CreateRoute", "ec2:DeleteRoute", "ec2:AssociateRouteTable", "ec2:DisassociateRouteTable", "ec2:CreateSecurityGroup", "ec2:DeleteSecurityGroup", "ec2:DescribeSecurityGroups", "ec2:AuthorizeSecurityGroupEgress", "ec2:RevokeSecurityGroupEgress", "ec2:CreateTags", "ec2:DeleteTags", "ec2:DescribeTags", "ec2:DescribeNetworkInterfaces", "ec2:DescribeAvailabilityZones"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "WorkerEcs",
+      "Effect": "Allow",
+      "Action": ["ecs:CreateCluster", "ecs:DeleteCluster", "ecs:DescribeClusters", "ecs:UpdateClusterSettings", "ecs:CreateService", "ecs:UpdateService", "ecs:DeleteService", "ecs:DescribeServices", "ecs:TagResource", "ecs:UntagResource", "ecs:ListTagsForResource", "ecs:RegisterTaskDefinition", "ecs:DeregisterTaskDefinition", "ecs:DescribeTaskDefinition"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "WorkerLogs",
+      "Effect": "Allow",
+      "Action": ["logs:CreateLogGroup", "logs:DeleteLogGroup", "logs:DescribeLogGroups", "logs:PutRetentionPolicy", "logs:DeleteRetentionPolicy", "logs:ListTagsForResource", "logs:TagResource", "logs:UntagResource"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ManageDevStrategyAlarm",
+      "Effect": "Allow",
+      "Action": ["cloudwatch:PutMetricAlarm", "cloudwatch:DeleteAlarms", "cloudwatch:DescribeAlarms", "cloudwatch:TagResource", "cloudwatch:UntagResource", "cloudwatch:ListTagsForResource"],
+      "Resource": "arn:aws:cloudwatch:us-east-1:499133675835:alarm:jimmy-dev-strategy-jobs-dlq"
+    },
+    {
+      "Sid": "ManageOnlyDevRuntimePolicies",
+      "Effect": "Allow",
+      "Action": ["iam:CreatePolicy", "iam:GetPolicy", "iam:GetPolicyVersion", "iam:ListPolicyVersions", "iam:CreatePolicyVersion", "iam:DeletePolicyVersion", "iam:DeletePolicy", "iam:TagPolicy", "iam:UntagPolicy"],
+      "Resource": [
+        "arn:aws:iam::499133675835:policy/jimmy-dev-backend-boundary",
+        "arn:aws:iam::499133675835:policy/jimmy-dev-strategy-worker-runtime"
+      ]
+    },
+    {
+      "Sid": "CreateBoundedDevWorkerRoles",
+      "Effect": "Allow",
+      "Action": "iam:CreateRole",
+      "Resource": [
+        "arn:aws:iam::499133675835:role/jimmy-dev-strategy-worker-execution",
+        "arn:aws:iam::499133675835:role/jimmy-dev-strategy-worker-task"
+      ],
+      "Condition": { "StringEquals": { "iam:PermissionsBoundary": [
+        "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy",
+        "arn:aws:iam::499133675835:policy/jimmy-dev-strategy-worker-runtime"
+      ] } }
+    },
+    {
+      "Sid": "ManageOnlyDevWorkerRoles",
+      "Effect": "Allow",
+      "Action": ["iam:GetRole", "iam:DeleteRole", "iam:UpdateAssumeRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies", "iam:ListInstanceProfilesForRole", "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:TagRole", "iam:UntagRole"],
+      "Resource": [
+        "arn:aws:iam::499133675835:role/jimmy-dev-strategy-worker-execution",
+        "arn:aws:iam::499133675835:role/jimmy-dev-strategy-worker-task"
+      ]
+    },
+    {
+      "Sid": "UpdateBackendBoundary",
+      "Effect": "Allow",
+      "Action": "iam:PutRolePermissionsBoundary",
+      "Resource": "arn:aws:iam::499133675835:role/jimmy-dev-backend-execution",
+      "Condition": { "StringEquals": { "iam:PermissionsBoundary": "arn:aws:iam::499133675835:policy/jimmy-dev-backend-boundary" } }
+    },
+    {
+      "Sid": "PassOnlyDevRuntimeRoles",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": [
+        "arn:aws:iam::499133675835:role/jimmy-dev-strategy-worker-execution",
+        "arn:aws:iam::499133675835:role/jimmy-dev-strategy-worker-task"
+      ],
+      "Condition": { "StringEquals": { "iam:PassedToService": "ecs-tasks.amazonaws.com" } }
+    }
+  ]
+}

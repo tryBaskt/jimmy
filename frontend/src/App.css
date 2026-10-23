@@ -4,6 +4,7 @@ main { max-width: 1160px; margin: auto; padding: 0 32px; }
 .brand-mark { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; background: #244d39; color: white; font-family: Georgia, serif; font-size: 23px; font-weight: 400; letter-spacing: 0; }
 .brand-dot { color: #72a274; }
 .header-right { display: flex; align-items: center; gap: 28px; }
+.header-right a, .header-right button { color: #214733; font: inherit; font-size: 13px; text-decoration: none; background: none; border: 0; cursor: pointer; white-space: nowrap; }
 .header-label { color: #667369; font-size: 13px; }
 .status-pill { display: inline-flex; align-items: center; gap: 8px; border: 1px solid #d9ddd6; border-radius: 999px; padding: 8px 12px; color: #69746b; background: #fff; font-size: 12px; font-weight: 600; white-space: nowrap; }
 .status-pill i { width: 7px; height: 7px; border-radius: 50%; background: #aeb8ad; }

@@ -1,1 +1,1 @@
-"""Runnable background jobs."""
+"""Deployable background workers."""

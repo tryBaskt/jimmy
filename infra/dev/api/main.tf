@@ -3,6 +3,55 @@ variable "package_path" {
   type        = string
 }
 
+variable "cognito_domain" {
+  type    = string
+  default = ""
+}
+variable "cognito_client_id" {
+  type    = string
+  default = ""
+}
+variable "public_url" {
+  type    = string
+  default = ""
+}
+variable "jobs_queue_url" {
+  type    = string
+  default = ""
+}
+
+resource "aws_iam_policy" "backend_boundary" {
+  name = "jimmy-dev-backend-boundary"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = "${aws_cloudwatch_log_group.backend.arn}:*"
+      },
+      {
+        Effect = "Allow"
+        Action = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:UpdateItem"]
+        Resource = [
+          "arn:aws:dynamodb:us-east-1:499133675835:table/jimmy-dev-user-sessions",
+          "arn:aws:dynamodb:us-east-1:499133675835:table/jimmy-dev-strategy-jobs"
+        ]
+      },
+      {
+        Effect   = "Allow"
+        Action   = "sqs:SendMessage"
+        Resource = "arn:aws:sqs:us-east-1:499133675835:jimmy-dev-strategy-jobs"
+      },
+      {
+        Effect   = "Allow"
+        Action   = "s3:GetObject"
+        Resource = "arn:aws:s3:::jimmy-dev-strategy-results-499133675835/jobs/*"
+      }
+    ]
+  })
+}
+
 resource "aws_cloudwatch_log_group" "backend" {
   name              = "/aws/lambda/jimmy-dev-backend"
   retention_in_days = 14
@@ -10,7 +59,7 @@ resource "aws_cloudwatch_log_group" "backend" {
 
 resource "aws_iam_role" "backend" {
   name                 = "jimmy-dev-backend-execution"
-  permissions_boundary = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+  permissions_boundary = aws_iam_policy.backend_boundary.arn
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -34,6 +83,12 @@ resource "aws_iam_role_policy" "logs" {
   })
 }
 
+resource "aws_iam_role_policy" "application" {
+  name   = "jimmy-dev-backend-application"
+  role   = aws_iam_role.backend.id
+  policy = aws_iam_policy.backend_boundary.policy
+}
+
 resource "aws_lambda_function" "backend" {
   function_name    = "jimmy-dev-backend"
   role             = aws_iam_role.backend.arn
@@ -43,8 +98,19 @@ resource "aws_lambda_function" "backend" {
   runtime          = "python3.14"
   architectures    = ["x86_64"]
   memory_size      = 256
-  timeout          = 15
-  depends_on       = [aws_iam_role_policy.logs]
+  timeout          = 29
+  depends_on       = [aws_iam_role_policy.logs, aws_iam_role_policy.application]
+  environment {
+    variables = {
+      JIMMY_COGNITO_DOMAIN    = var.cognito_domain
+      JIMMY_COGNITO_CLIENT_ID = var.cognito_client_id
+      JIMMY_PUBLIC_URL        = var.public_url
+      JIMMY_SESSIONS_TABLE    = "jimmy-dev-user-sessions"
+      JIMMY_JOBS_TABLE        = "jimmy-dev-strategy-jobs"
+      JIMMY_JOBS_QUEUE_URL    = var.jobs_queue_url
+      JIMMY_RESULTS_BUCKET    = "jimmy-dev-strategy-results-499133675835"
+    }
+  }
 }
 
 resource "aws_apigatewayv2_api" "backend" {
@@ -57,7 +123,7 @@ resource "aws_apigatewayv2_integration" "backend" {
   integration_type       = "AWS_PROXY"
   integration_uri        = aws_lambda_function.backend.invoke_arn
   payload_format_version = "2.0"
-  timeout_milliseconds   = 15000
+  timeout_milliseconds   = 29000
 }
 
 resource "aws_apigatewayv2_route" "backend" {
