@@ -260,7 +260,7 @@ class BedrockStrategyAgent:
             PLAN_INSTRUCTIONS,
             f"User hypothesis: {prompt}\nLookback control: {lookback_months} months.\n"
             f"Connected feature sources: {self._feature_sources.capabilities()}",
-            PLAN_TOOL, 800,
+            PLAN_TOOL, 2400,
         )
         if isinstance(result, dict) and result.get("supported", True):
             market_weight_requested = bool(re.search(
