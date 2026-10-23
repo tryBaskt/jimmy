@@ -249,9 +249,11 @@ jobs:
         id: auth
         working-directory: infra/dev/frontend
         run: |
-          echo "frontend_url=$(terraform output -raw frontend_url)" >> "${GITHUB_OUTPUT}"
-          echo "cognito_domain=$(terraform output -raw cognito_domain)" >> "${GITHUB_OUTPUT}"
-          echo "cognito_client_id=$(terraform output -raw cognito_client_id)" >> "${GITHUB_OUTPUT}"
+          {
+            echo "frontend_url=$(terraform output -raw frontend_url)"
+            echo "cognito_domain=$(terraform output -raw cognito_domain)"
+            echo "cognito_client_id=$(terraform output -raw cognito_client_id)"
+          } >> "${GITHUB_OUTPUT}"
       - name: Publish frontend and verify API routing
         working-directory: infra/dev/frontend
         run: |
