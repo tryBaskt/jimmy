@@ -16,6 +16,9 @@ from botocore.exceptions import ClientError
 from packages.agents.strategy_agent.plan import (
     BedrockStrategyAgent, StrategyPlanError, UnsupportedStrategyError,
 )
+from packages.agents.strategy_agent.feature_sources import (
+    UnavailableFeatureSource, price_history_registry,
+)
 from packages.agents.strategy_agent.tools.dynamodb import list_universe_symbols
 from packages.agents.strategy_agent.tools.yfinance import (
     MarketDataError,
@@ -35,16 +38,18 @@ def _failure_explanation(error: Exception) -> str:
         reason = str(error).strip()
         return (
             f"This strategy is not supported: {reason}. "
-            "Try a specific price-based selection rule with monthly or quarterly rebalancing."
+            "Try a specific selection rule using connected data sources."
         )[:300]
     if isinstance(error, StrategyPlanError):
         return (
-            "The strategy planner could not produce a valid test plan. State which price signal "
-            "to rank, the number of stocks, weighting, and rebalance period. "
+            "The strategy planner could not produce a valid test plan. Describe the data, "
+            "stock-selection rule, and rebalance period. "
             "If you already did, this is a planner error."
         )
     if isinstance(error, MarketDataError):
         return "Historical stock prices could not be loaded. This is a data-source issue; please try later."
+    if isinstance(error, UnavailableFeatureSource):
+        return f"This strategy cannot run yet: {error}."
     if isinstance(error, ValueError):
         detail = str(error)
         if detail.startswith("Only ") and "stocks" in detail:
@@ -127,15 +132,19 @@ def process_message(message: dict, *, session, jobs, sqs, queue_url: str,
         item = jobs.get_item(Key={"job_id": job_id}, ConsistentRead=True)["Item"]
         end = datetime.fromisoformat(item["end_at"])
         dynamodb = session.client("dynamodb")
+        feature_sources = price_history_registry()
         report = run_strategy(
             prompt=item["prompt"], lookback_months=int(item["lookback_months"]),
-            agent=BedrockStrategyAgent(session=session, model_id=model_id),
+            agent=BedrockStrategyAgent(session=session, model_id=model_id,
+                                       feature_sources=feature_sources),
             universe_loader=lambda universe: list_universe_symbols(
                 dynamodb, "jimmy-dev-stock-universe-membership", universe,
             ),
             price_loader=get_adjusted_close_prices,
             market_cap_loader=get_daily_prices_and_market_caps,
             start=end - timedelta(days=365), end=end, job_id=job_id,
+            evidence={"user_sub": item.get("user_sub"), "artifacts": item.get("artifacts", [])},
+            feature_sources=feature_sources,
         )
         logger.info("Strategy job %s report ready; uploading result", job_id)
         session.client("s3").put_object(

@@ -8,8 +8,8 @@ import logging
 import random
 import time
 from datetime import datetime, timedelta
-from math import isfinite, sqrt
-from typing import Any, Callable
+from math import isfinite
+from typing import Any, Callable, Mapping
 
 import numpy as np
 import pandas as pd
@@ -18,27 +18,12 @@ from packages.agent_harness.runtime import RunContext, RunRecord, ToolRegistry
 
 from .tools.backtest import replay_portfolios
 from .plan import StrategyPlan
+from .feature_sources import (
+    FeatureContext, FeaturePreparationContext, FeatureSourceRegistry, price_history_registry,
+)
+from .signal_expression import evaluate_signal
 
 logger = logging.getLogger(__name__)
-
-
-def _signal_values(metric: str, window: pd.DataFrame, spy: pd.Series) -> pd.Series:
-    if metric == "trailing_return":
-        return window.iloc[-1] / window.iloc[0] - 1
-    if metric == "drawdown_from_peak":
-        return window.iloc[-1] / window.max() - 1
-    if metric == "moving_average_gap":
-        return window.iloc[-1] / window.mean() - 1
-    returns = window.pct_change().iloc[1:]
-    if metric == "realized_volatility":
-        return returns.std(ddof=1) * sqrt(252)
-    if metric == "market_beta":
-        market_returns = spy.pct_change().iloc[1:]
-        variance = market_returns.var(ddof=1)
-        if not isfinite(variance) or variance == 0:
-            return pd.Series(np.nan, index=window.columns)
-        return returns.apply(lambda series: series.cov(market_returns)) / variance
-    raise ValueError(f"Unsupported signal: {metric}")
 
 
 def _validate_decision(raw: Any, plan: StrategyPlan, candidates: set[str]) -> list[dict]:
@@ -92,6 +77,8 @@ def run_strategy(
     include_replay_prices: bool = False,
     random_seed: int | None = None,
     job_id: str | None = None,
+    feature_sources: FeatureSourceRegistry | None = None,
+    evidence: Mapping[str, Any] | None = None,
 ) -> dict:
     """Run a price-based test while keeping each agent decision behind its cutoff."""
     if start.tzinfo is None or end.tzinfo is None or end <= start or end - start < timedelta(days=90):
@@ -146,6 +133,20 @@ def run_strategy(
             lambda result: {"rows": len(result)},
         )
     plan = agent.plan(prompt, lookback_months)
+    sources = feature_sources or price_history_registry()
+    sources.require(plan.features)
+    feature_definitions = {feature["id"]: feature for feature in plan.features}
+
+    def calculate_feature(reference: str, window: pd.DataFrame,
+                          benchmark: pd.Series, as_of: pd.Timestamp) -> pd.Series:
+        if reference in feature_definitions:
+            return sources.evaluate(
+                feature_definitions[reference],
+                FeatureContext(as_of=as_of, close=window, spy=benchmark,
+                               evidence=evidence or {}),
+            )
+        return evaluate_signal(reference, window, benchmark)
+
     progress("plan_ready", rebalance=plan.rebalance, weighting=plan.weighting,
              holdings=plan.top_n, rule=plan.ranking_rule())
     if plan.weighting == "market_cap" and market_cap_loader is None:
@@ -170,6 +171,12 @@ def run_strategy(
     fetch_start = (
         pd.Timestamp(start) - pd.DateOffset(months=plan.lookback_months) - pd.Timedelta(days=45)
     ).to_pydatetime()
+    progress("preparing_features", sources=len({feature["source"] for feature in plan.features}))
+    sources.prepare(
+        plan.features,
+        FeaturePreparationContext(symbols=tuple(symbols), start=fetch_start,
+                                  end=end, evidence=evidence or {}),
+    )
     progress("loading_prices", symbols=len(symbols) + 1,
              start=fetch_start.date(), end=end.date())
     raw = tools.call(
@@ -214,7 +221,7 @@ def run_strategy(
             feature_cache = {}
             def feature_values(feature: str) -> pd.Series:
                 if feature not in feature_cache:
-                    values = _signal_values(feature, prices.iloc[first:i], spy.iloc[first:i])
+                    values = calculate_feature(feature, prices.iloc[first:i], spy.iloc[first:i], signal_date)
                     feature_cache[feature] = values.replace([np.inf, -np.inf], np.nan).dropna()
                 return feature_cache[feature]
             for step in plan.selection_steps:
@@ -243,7 +250,7 @@ def run_strategy(
             ]}
             positions = _validate_decision(raw_decision, plan, set(candidates_symbols))
         else:
-            values = _signal_values(plan.metric, prices.iloc[first:i], spy.iloc[first:i])
+            values = calculate_feature(plan.metric, prices.iloc[first:i], spy.iloc[first:i], signal_date)
             values = values.replace([np.inf, -np.inf], np.nan).dropna()
             if len(values) < plan.top_n:
                 raise ValueError(f"Too few valid signals on {signal_date.date()}")

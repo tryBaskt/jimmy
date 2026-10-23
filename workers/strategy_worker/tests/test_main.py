@@ -4,6 +4,7 @@ from unittest.mock import Mock
 from workers.strategy_worker import main
 from packages.agents.strategy_agent.plan import StrategyPlanError, UnsupportedStrategyError
 from packages.agents.strategy_agent.tools.yfinance import MarketDataError
+from packages.agents.strategy_agent.feature_sources import UnavailableFeatureSource
 
 
 def test_successful_job_persists_report_before_acknowledging(monkeypatch):
@@ -63,8 +64,11 @@ def test_invalid_plan_fails_job_without_waiting_for_queue_retry(monkeypatch):
 def test_failure_explanations_distinguish_prompt_data_and_service_errors():
     unsupported = main._failure_explanation(UnsupportedStrategyError("Earnings calls are unavailable"))
     assert "Earnings calls are unavailable" in unsupported
-    assert "price-based selection rule" in unsupported
+    assert "connected data sources" in unsupported
     assert "data-source issue" in main._failure_explanation(MarketDataError("Yahoo returned no prices"))
+    assert "cannot run yet" in main._failure_explanation(
+        UnavailableFeatureSource("uploaded_documents is not connected")
+    )
     assert "service error" in main._failure_explanation(RuntimeError("private internal detail"))
     assert "private internal detail" not in main._failure_explanation(RuntimeError("private internal detail"))
 
