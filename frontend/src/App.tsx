@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import {
-  getHealth, getStrategyCapabilities, runStrategy,
-  type Health, type StrategyResult,
+  getAuthState, getHealth, getStrategyCapabilities, runStrategy, signOut,
+  type AuthState, type Health, type StrategyResult,
 } from './api/client'
 import './App.css'
 
@@ -41,6 +41,8 @@ function PerformanceChart({ points }: { points: StrategyResult['performance_curv
 
 function Results({ result }: { result: StrategyResult }) {
   const latest = result.selections.at(-1)
+  const samples = result.plan.selection_steps?.some((step) => step.operation === 'sample')
+  const usesPrices = !samples || result.plan.selection_steps.length > 1
 
   return (
     <section className="results" aria-labelledby="results-title">
@@ -48,7 +50,7 @@ function Results({ result }: { result: StrategyResult }) {
         <div><p className="eyebrow">RESEARCH REPORT</p><h2 id="results-title">Strategy, tested.</h2></div>
         <span className="result-tag">{result.plan.universe} · {result.plan.rebalance} · {result.plan.weighting === 'equal' ? 'equal weight' : result.plan.weighting === 'market_cap' ? 'market-cap weight' : 'model weight'}</span>
       </div>
-      <p className="results-lede">{result.plan.hypothesis} At each {result.plan.rebalance} rebalance, the agent used signals available at the prior close. The recorded decisions were replayed from {result.start} to {result.end_exclusive}.</p>
+      <p className="results-lede">{result.plan.hypothesis} At each {result.plan.rebalance} rebalance, the saved selection plan chose stocks using information available at the prior close. The recorded decisions were replayed from {result.start} to {result.end_exclusive}.</p>
 
       <div className="metrics-grid">
         <article className="metric primary-metric"><span>Strategy return</span><strong>{percent(result.strategy.total_return)}</strong><small>Full backtest</small></article>
@@ -66,8 +68,8 @@ function Results({ result }: { result: StrategyResult }) {
         <section className="report-panel" aria-labelledby="process-title">
           <div className="panel-heading"><div><h3 id="process-title">How each rebalance works</h3><p>One fixed plan, repeated throughout the backtest</p></div></div>
           <ol className="process-list">
-            <li><strong>Measure the previous {result.plan.lookback_months} months</strong><span>Use prices ending at the previous month’s final close to calculate the requested signal.</span></li>
-            <li><strong>Choose up to {result.plan.top_n} stocks</strong><span>The agent chooses stocks and direction; {result.plan.weighting === 'market_cap' ? 'historical market caps set the weights' : result.plan.weighting === 'equal' ? 'weights are equal' : 'the agent suggests weights'}.</span></li>
+            <li><strong>{usesPrices ? `Measure the previous ${result.plan.lookback_months} months` : 'Start with the eligible universe'}</strong><span>{usesPrices ? 'Use prices available at the prior close to apply the requested rule.' : 'A random sample uses the full eligible universe; the lookback does not affect the draw.'}</span></li>
+            <li><strong>Choose up to {result.plan.top_n} stocks</strong><span>{samples ? 'Draw a repeatable random sample' : 'Apply the selection plan'}; {result.plan.weighting === 'market_cap' ? 'historical market caps set the weights' : result.plan.weighting === 'equal' ? 'weights are equal' : 'the agent suggests weights'}.</span></li>
             <li><strong>Replay the portfolio</strong><span>Trade at the first trading-day close, then hold until the next {result.plan.rebalance} rebalance.</span></li>
           </ol>
         </section>
@@ -87,6 +89,7 @@ function Results({ result }: { result: StrategyResult }) {
 
 export default function App() {
   const [health, setHealth] = useState<Health | null>(null)
+  const [auth, setAuth] = useState<AuthState | null>(null)
   const [available, setAvailable] = useState<boolean | null>(null)
   const [connectionError, setConnectionError] = useState('')
   const [prompt, setPrompt] = useState(examplePrompt)
@@ -100,8 +103,8 @@ export default function App() {
 
   useEffect(() => {
     const controller = new AbortController()
-    Promise.all([getHealth(controller.signal), getStrategyCapabilities(controller.signal)])
-      .then(([service, enabled]) => { if (!controller.signal.aborted) { setHealth(service); setAvailable(enabled) } })
+    Promise.all([getHealth(controller.signal), getStrategyCapabilities(controller.signal), getAuthState(controller.signal)])
+      .then(([service, enabled, session]) => { if (!controller.signal.aborted) { setHealth(service); setAvailable(enabled); setAuth(session) } })
       .catch((reason: unknown) => {
         if (!controller.signal.aborted) {
           setConnectionError(reason instanceof Error ? reason.message : 'Connection failed')
@@ -113,7 +116,7 @@ export default function App() {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!available || running || !prompt.trim() || !validLookback) return
+    if (!available || auth?.mode !== 'signed_in' || running || !prompt.trim() || !validLookback) return
     const controller = new AbortController()
     runController.current = controller
     setRunning(true)
@@ -131,7 +134,7 @@ export default function App() {
 
   return (
     <main>
-      <header className="site-header"><div className="brand"><span className="brand-mark">J</span><span>jimmy<span className="brand-dot">.</span></span></div><div className="header-right"><span className="header-label">Strategy testing</span><span className={`status-pill ${health ? 'online' : ''}`}><i />{health ? 'API connected' : connectionError ? 'API unavailable' : 'Connecting'}</span></div></header>
+      <header className="site-header"><div className="brand"><span className="brand-mark">J</span><span>jimmy<span className="brand-dot">.</span></span></div><div className="header-right"><span className="header-label">Strategy testing</span>{auth?.mode === 'signed_out' && <><a href="/api/auth/login">Sign in</a><a href="/api/auth/signup">Sign up</a></>}{auth?.mode === 'signed_in' && <><span>{auth.email}</span><button type="button" onClick={() => { void signOut().then(() => setAuth({ mode: 'signed_out' })).catch((error: unknown) => setRunError(error instanceof Error ? error.message : 'Could not sign out')) }}>Sign out</button></>}<span className={`status-pill ${health ? 'online' : ''}`}><i />{health ? 'API connected' : connectionError ? 'API unavailable' : 'Connecting'}</span></div></header>
       <section className="intro"><p className="eyebrow">STRATEGY TEST / 01</p><h1>From an idea to<br /><em>evidence.</em></h1><p>State a specific price-based trading hypothesis and choose a lookback. Jimmy will make dated portfolio decisions and replay them over history.</p></section>
 
       <section className="prompt-panel" aria-labelledby="prompt-title">
@@ -140,7 +143,7 @@ export default function App() {
           <label className="sr-only" htmlFor="strategy-prompt">Trading strategy prompt</label>
           <textarea id="strategy-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} maxLength={4000} rows={5} placeholder="Describe your trading strategy…" />
           <div className="lookback-control"><label htmlFor="lookback-months">Look back <input id="lookback-months" type="number" min="1" max="12" step="1" required value={lookbackInput} onChange={(event) => setLookbackInput(event.target.value)} /> months</label><p>Use the previous {validLookback ? lookbackMonths : 'selected'} months of prices to apply your rule at each rebalance.</p></div>
-          <div className="prompt-actions"><span>{available === null ? 'Checking strategy testing availability…' : available ? 'Uses current S&P 500 membership and historical adjusted prices.' : 'Strategy testing runs locally. Start the app with AWS credentials to enable it.'}</span><button type="submit" disabled={!available || running || !prompt.trim() || !validLookback}>{running ? 'Testing…' : 'Run strategy'}<span aria-hidden="true">→</span></button></div>
+          <div className="prompt-actions"><span>{auth?.mode === 'signed_out' ? 'Sign in to run a strategy.' : available === null ? 'Checking strategy testing availability…' : available ? 'Uses current S&P 500 membership and historical adjusted prices.' : 'Strategy testing is unavailable.'}</span><button type="submit" disabled={!available || auth?.mode !== 'signed_in' || running || !prompt.trim() || !validLookback}>{running ? 'Testing…' : 'Run strategy'}<span aria-hidden="true">→</span></button></div>
         </form>
         {runError && <p className="error-message" role="alert">{runError}</p>}
         {connectionError && <p className="connection-hint">{connectionError}</p>}

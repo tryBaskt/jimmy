@@ -154,3 +154,37 @@ def test_missing_market_caps_get_equal_slots_from_remaining_weight():
     assert events[0]["details"]["fallback_symbols"] == ["CCC"]
     assert events[1]["details"]["fallback_symbols"] == ["AAA", "BBB", "CCC"]
     assert any("without a valid market cap" in limitation for limitation in report["limitations"])
+
+
+def test_random_selection_replays_deterministically_without_price_ranking():
+    dates = pd.bdate_range("2025-01-01", "2025-07-01", tz="UTC")
+    symbols = [f"S{i:02d}" for i in range(25)]
+    prices = pd.DataFrame({symbol: [100 + i * 0.1 for i in range(len(dates))]
+                           for symbol in symbols + ["SPY"]}, index=dates)
+
+    class Agent:
+        model_id = "test"
+
+        def plan(self, prompt, lookback):
+            return StrategyPlan.from_model({
+                "supported": True, "hypothesis": prompt, "universe": "SP500",
+                "top_n": 15, "rebalance": "monthly", "selection_steps": [{"operation": "sample"}],
+                "weighting": "equal", "allow_short": False, "fees_bps": 0, "slippage_bps": 0,
+            }, lookback)
+
+        def decide(self, *args):
+            pytest.fail("Declarative selection should not call the model per rebalance")
+
+    kwargs = dict(prompt="Choose 15 S&P 500 stocks randomly each month", lookback_months=2,
+                  agent=Agent(), universe_loader=lambda _: symbols,
+                  price_loader=lambda requested, start, end: prices,
+                  start=datetime(2025, 3, 1, tzinfo=timezone.utc),
+                  end=datetime(2025, 7, 1, tzinfo=timezone.utc))
+    first = run_strategy(**kwargs)
+    second = run_strategy(**kwargs)
+    assert first["random_seed"] == second["random_seed"]
+    assert first["decisions"] == second["decisions"]
+    assert len(first["decisions"]) == 4
+    assert all(len(set(decision["symbols"])) == 15 for decision in first["decisions"])
+    assert all(decision["candidate_count"] == 15 for decision in first["decisions"])
+    assert all(decision["lookback_start"] is None for decision in first["decisions"])

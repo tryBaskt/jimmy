@@ -29,7 +29,8 @@
       "Resource": [
         "arn:aws:s3:::jimmy-dev-terraform-state-499133675835/dev/terraform.tfstate",
         "arn:aws:s3:::jimmy-dev-terraform-state-499133675835/dev/backend/terraform.tfstate",
-        "arn:aws:s3:::jimmy-dev-terraform-state-499133675835/dev/frontend/terraform.tfstate"
+        "arn:aws:s3:::jimmy-dev-terraform-state-499133675835/dev/frontend/terraform.tfstate",
+        "arn:aws:s3:::jimmy-dev-terraform-state-499133675835/dev/worker/terraform.tfstate"
       ]
     },
     {
@@ -43,7 +44,8 @@
       "Resource": [
         "arn:aws:s3:::jimmy-dev-terraform-state-499133675835/dev/terraform.tfstate.tflock",
         "arn:aws:s3:::jimmy-dev-terraform-state-499133675835/dev/backend/terraform.tfstate.tflock",
-        "arn:aws:s3:::jimmy-dev-terraform-state-499133675835/dev/frontend/terraform.tfstate.tflock"
+        "arn:aws:s3:::jimmy-dev-terraform-state-499133675835/dev/frontend/terraform.tfstate.tflock",
+        "arn:aws:s3:::jimmy-dev-terraform-state-499133675835/dev/worker/terraform.tfstate.tflock"
       ]
     }
   ]

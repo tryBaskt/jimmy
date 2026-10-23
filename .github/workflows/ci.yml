@@ -50,7 +50,7 @@ jobs:
       - name: Check and validate Terraform roots
         run: |
           terraform fmt -check -recursive infra/dev
-          for root in infra/dev infra/dev/api infra/dev/frontend; do
+          for root in infra/dev infra/dev/api infra/dev/frontend infra/dev/worker; do
             terraform -chdir="${root}" init -backend=false -input=false -lockfile=readonly
             terraform -chdir="${root}" validate
           done
@@ -60,6 +60,7 @@ jobs:
           python3 -m json.tool infra/dev/iam/terraform-state.json > /dev/null
           python3 -m json.tool infra/dev/iam/fmp-secret-provisioning.json > /dev/null
           python3 -m json.tool infra/dev/iam/application-provisioning.json > /dev/null
+          python3 -m json.tool infra/dev/iam/platform-provisioning.json > /dev/null
 
 
   api:
@@ -96,7 +97,7 @@ jobs:
       - name: Install strategy dependencies
         run: python -m pip install -r packages/agents/strategy_agent/requirements.txt pytest==9.1.1
       - name: Test agent harness and strategy agent
-        run: python -m pytest packages/agent_harness/tests packages/agents/strategy_agent/tests -q
+        run: python -m pytest packages/agent_harness/tests packages/agents/strategy_agent/tests workers/strategy_worker/tests -q
 
   frontend:
     name: Validate React frontend

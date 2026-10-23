@@ -55,9 +55,7 @@
         "apigateway:POST",
         "apigateway:PUT",
         "apigateway:PATCH",
-        "apigateway:DELETE",
-        "apigateway:TagResource",
-        "apigateway:UntagResource"
+        "apigateway:DELETE"
       ],
       "Resource": [
         "arn:aws:apigateway:us-east-1::/apis",
@@ -75,7 +73,7 @@
       "Resource": "arn:aws:iam::499133675835:role/jimmy-dev-backend-execution",
       "Condition": {
         "StringEquals": {
-          "iam:PermissionsBoundary": "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+          "iam:PermissionsBoundary": "arn:aws:iam::499133675835:policy/jimmy-dev-backend-boundary"
         }
       }
     },
@@ -123,7 +121,6 @@
         "s3:PutBucketPublicAccessBlock",
         "s3:GetBucketOwnershipControls",
         "s3:PutBucketOwnershipControls",
-        "s3:DeleteBucketOwnershipControls",
         "s3:GetEncryptionConfiguration",
         "s3:PutEncryptionConfiguration",
         "s3:GetBucketTagging",

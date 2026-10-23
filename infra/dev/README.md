@@ -59,7 +59,7 @@ backend must exist before Terraform initializes. The bucket is retained across
 runs and is not deleted by a table destroy. Do not delete or rename it without
 planning a state migration. Backend operations use the default Terraform workspace.
 
-[Dev IAM](iam/README.md) documents the two resource-scoped policies on the single
+[Dev IAM](iam/README.md) documents the provisioning policies on the single
 existing deployment role. The GitHub `dev` environment must allow the `dev` branch.
 PR validation never receives AWS credentials or applies resources.
 
@@ -76,7 +76,7 @@ or plan files.
 value was uploaded directly from the local `.env` using an administrator session.
 No secret-version resource, secret-value data source, or value output is used,
 so Terraform does not read or store the API key. Destruction is prevented.
-The local ingestion script reads the value at runtime using the local AWS profile.
+The separate metadata ingestion utility reads the value at runtime using AWS credentials.
 
 ## Application provisioning
 
@@ -93,8 +93,23 @@ replace existing resources.
 Every job uses `jimmy-dev-github-actions` and the protected `dev` environment.
 The final job writes the deployed frontend URL to the workflow summary.
 
-Before running the expanded workflow, an administrator must update the existing
-role's `jimmy-dev-terraform-state` inline policy from `iam/terraform-state.json`
-and add `iam/application-provisioning.json` as `jimmy-dev-application-provisioning`.
-The workflow cannot grant itself these additional permissions. See the IAM README.
+## Authenticated async strategy jobs
+
+This root also owns `jimmy-dev-user-sessions` and `jimmy-dev-strategy-jobs`
+(DynamoDB), `jimmy-dev-strategy-jobs` and its dead-letter queue (SQS), a private
+30-day results bucket, and an ECR repository. The frontend root owns the dev
+Cognito user pool, managed-login domain and web client, whose callback is the
+CloudFront URL. The API root adds auth/session and job permissions to the
+existing Lambda. The independent [`worker/`](worker/) root owns a two-subnet
+VPC, ECS cluster, one Fargate service, task roles and logs. Its tasks have
+outbound HTTPS and no inbound route from the internet.
+
+The workflow now also builds and deploys the worker after base infrastructure,
+then reapplies the API after the frontend produces the Cognito callback URL and
+client ID. The deployment policies have been applied to the existing dev role;
+see [dev IAM](iam/README.md) for their scope and future updates.
+
+The workflow cannot grant its own role additional permissions. Those policies
+were applied and verified on 2026-10-22. Future policy changes still require
+administrator review. See the IAM README.
 Prod is not deployed by this workflow; `infra/prod` remains independent.

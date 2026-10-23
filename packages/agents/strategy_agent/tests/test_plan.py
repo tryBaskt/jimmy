@@ -54,3 +54,19 @@ def test_market_weight_prompt_accepts_missing_optional_model_fields():
     assert plan.weighting == "market_cap"
     assert plan.top_n == 10
     assert plan.fees_bps == 5
+
+
+def test_complete_random_hypothesis_uses_generic_sampling_step():
+    agent = BedrockStrategyAgent(session=Mock(), model_id="test")
+    agent._ask = lambda *args: {
+        "top_n": 15, "rebalance": "monthly",
+        "selection_steps": [{"operation": "sample"}],
+    }
+    plan = agent.plan("Choose 15 S&P 500 stocks randomly each month", 2)
+    assert plan.selection_steps == ({"operation": "sample"},)
+    assert plan.ranking_rule() == "random sample"
+
+
+def test_selection_steps_reject_unavailable_operations():
+    with pytest.raises(ValueError, match="Invalid selection step"):
+        StrategyPlan.from_model(model_plan(selection_steps=[{"operation": "execute_python"}]), 2)

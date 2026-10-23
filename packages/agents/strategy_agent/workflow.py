@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 from datetime import datetime, timedelta
 from math import isfinite, sqrt
 from typing import Any, Callable
@@ -85,6 +86,7 @@ def run_strategy(
     end: datetime,
     market_cap_loader: Callable[[list[str], datetime, datetime], pd.DataFrame] | None = None,
     include_replay_prices: bool = False,
+    random_seed: int | None = None,
 ) -> dict:
     """Run a price-based test while keeping each agent decision behind its cutoff."""
     if start.tzinfo is None or end.tzinfo is None or end <= start or end - start < timedelta(days=90):
@@ -139,6 +141,14 @@ def run_strategy(
     symbols = sorted(set(tools.call("read_universe", context, {"universe": plan.universe})) - {"SPY"})
     if not symbols:
         raise ValueError("The selected universe contains no stocks")
+    if random_seed is not None and (type(random_seed) is not int or random_seed < 0):
+        raise ValueError("random_seed must be a nonnegative integer")
+    seed = random_seed if random_seed is not None else int.from_bytes(hashlib.sha256(
+        json.dumps({"prompt": prompt, "plan": plan.to_dict(), "symbols": symbols,
+                    "start": start.date().isoformat(), "end": end.date().isoformat()},
+                   sort_keys=True).encode()
+    ).digest()[:8], "big")
+    rng = random.Random(seed)
     fetch_start = (
         pd.Timestamp(start) - pd.DateOffset(months=plan.lookback_months) - pd.Timedelta(days=45)
     ).to_pydatetime()
@@ -169,19 +179,56 @@ def run_strategy(
         if execute_date < start or execute_date >= end:
             continue
         signal_date = prices.index[i - 1]
-        cutoff = signal_date - pd.DateOffset(months=plan.lookback_months)
-        first = prices.index.searchsorted(cutoff, side="right") - 1
-        if first < 0:
-            continue
-        values = _signal_values(plan.metric, prices.iloc[first:i], spy.iloc[first:i])
-        values = values.replace([np.inf, -np.inf], np.nan).dropna()
-        if len(values) < plan.top_n:
-            raise ValueError(f"Too few valid signals on {signal_date.date()}")
-        ranked = values.sort_values(ascending=plan.rank_direction == "lowest", kind="stable")
-        shortlist = ranked.head(max(60, plan.top_n * 3))
-        candidates = [{"symbol": symbol, "signal": round(float(value), 8)} for symbol, value in shortlist.items()]
-        raw_decision = agent.decide(plan, signal_date.date().isoformat(), candidates)
-        positions = _validate_decision(raw_decision, plan, set(shortlist.index))
+        sample_only = plan.selection_steps == ({"operation": "sample"},)
+        first = None
+        if not sample_only:
+            cutoff = signal_date - pd.DateOffset(months=plan.lookback_months)
+            first = prices.index.searchsorted(cutoff, side="right") - 1
+            if first < 0:
+                continue
+        if plan.selection_steps:
+            candidates_symbols = eligible.copy()
+            feature_cache = {}
+            def feature_values(feature: str) -> pd.Series:
+                if feature not in feature_cache:
+                    values = _signal_values(feature, prices.iloc[first:i], spy.iloc[first:i])
+                    feature_cache[feature] = values.replace([np.inf, -np.inf], np.nan).dropna()
+                return feature_cache[feature]
+            for step in plan.selection_steps:
+                if step["operation"] == "filter":
+                    values = feature_values(step["feature"])
+                    compare = {"gt": values.gt, "gte": values.ge, "lt": values.lt, "lte": values.le}[step["comparison"]]
+                    passing = compare(step["value"])
+                    candidates_symbols = [symbol for symbol in candidates_symbols if bool(passing.get(symbol, False))]
+                elif step["operation"] == "rank":
+                    values = feature_values(step["feature"])
+                    candidates_symbols = [symbol for symbol in candidates_symbols if symbol in values]
+                    candidates_symbols.sort(key=lambda symbol: (float(values[symbol]), symbol),
+                                            reverse=step["direction"] == "highest")
+                    candidates_symbols = candidates_symbols[:plan.top_n]
+                else:
+                    if len(candidates_symbols) < plan.top_n:
+                        raise ValueError(f"Only {len(candidates_symbols)} stocks pass the selection steps on {signal_date.date()}")
+                    candidates_symbols = rng.sample(candidates_symbols, plan.top_n)
+            if len(candidates_symbols) < plan.top_n:
+                raise ValueError(f"Only {len(candidates_symbols)} stocks pass the selection steps on {signal_date.date()}")
+            candidates = [{"symbol": symbol} for symbol in candidates_symbols]
+            raw_decision = {"positions": [
+                {"symbol": symbol, "direction": "long", "weight": 1 / plan.top_n,
+                 "reason": plan.ranking_rule()}
+                for symbol in candidates_symbols
+            ]}
+            positions = _validate_decision(raw_decision, plan, set(candidates_symbols))
+        else:
+            values = _signal_values(plan.metric, prices.iloc[first:i], spy.iloc[first:i])
+            values = values.replace([np.inf, -np.inf], np.nan).dropna()
+            if len(values) < plan.top_n:
+                raise ValueError(f"Too few valid signals on {signal_date.date()}")
+            ranked = values.sort_values(ascending=plan.rank_direction == "lowest", kind="stable")
+            shortlist = ranked.head(max(60, plan.top_n * 3))
+            candidates = [{"symbol": symbol, "signal": round(float(value), 8)} for symbol, value in shortlist.items()]
+            raw_decision = agent.decide(plan, signal_date.date().isoformat(), candidates)
+            positions = _validate_decision(raw_decision, plan, set(shortlist.index))
         record.add(
             "portfolio_decision", as_of=signal_date.to_pydatetime(),
             details={
@@ -194,7 +241,7 @@ def run_strategy(
         decisions.append({
             "signal_date": signal_date.date().isoformat(),
             "rebalance_date": execute_date.date().isoformat(),
-            "lookback_start": prices.index[first].date().isoformat(),
+            "lookback_start": prices.index[first].date().isoformat() if first is not None else None,
             "positions": positions,
             "symbols": [position["symbol"] for position in positions],
             "candidate_count": len(candidates),
@@ -279,6 +326,7 @@ def run_strategy(
         "run_record": record.to_dict(),
         "plan": plan.to_dict(), "ranking_rule": plan.ranking_rule(),
         "model_id": getattr(agent, "model_id", "unknown"),
+        "random_seed": seed if any(step["operation"] == "sample" for step in plan.selection_steps) else None,
         "universe_symbol_count": len(symbols), "eligible_symbol_count": len(eligible),
         "excluded_symbols": excluded,
         "start": start.date().isoformat(), "end_exclusive": end.date().isoformat(),

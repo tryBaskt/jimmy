@@ -17,5 +17,9 @@ are retained so open tabs remain functional. Uploads are separate from Terraform
 Terraform owns the bucket, not individual build files. S3 public access is blocked,
 and only this CloudFront distribution can read objects through its origin policy.
 
+The same root creates the dev Cognito user pool, managed login and web client.
+The client callback uses this distribution's HTTPS hostname. The API is
+configured with these outputs in the later **configure api auth** job.
+
 Validate with `terraform init -backend=false -lockfile=readonly` and
 `terraform validate`. Deploy only via GitHub Actions from `dev`.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from math import isfinite
 import re
 from typing import Any
 
@@ -17,7 +18,14 @@ requests to discover whichever signal worked best, and requests requiring
 earnings calls, news, fundamentals, options, or other unavailable data.
 Reject sector-neutral, beta-neutral, or other portfolio constraints that
 cannot be enforced by this version of the simulator.
-The available signals are trailing price return, realized volatility,
+Translate complete selection rules into selection_steps: zero or more filters
+on an available numeric signal, then exactly one rank or sample operation.
+Sample draws top_n different stocks uniformly from the eligible universe;
+use it for random-selection hypotheses. Never replace sampling with ranking.
+Filters use comparison gt/gte/lt/lte and a numeric value. Rank uses feature
+and direction highest/lowest. Sample needs only operation=sample. Selection
+steps support long-only equal or market-cap weights. For selection_steps omit
+metric and rank_direction. The available signals are trailing price return, realized volatility,
 drawdown from a period high, distance from the period average price, and beta
 to SPY. The available universe is current SP500 membership. Rebalancing may
 be monthly or quarterly. The user's separate lookback-months control takes
@@ -66,6 +74,7 @@ class StrategyPlan:
     allow_short: bool
     fees_bps: int
     slippage_bps: int
+    selection_steps: tuple[dict, ...] = ()
 
     @classmethod
     def from_model(cls, value: Any, lookback_months: int) -> "StrategyPlan":
@@ -82,7 +91,11 @@ class StrategyPlan:
             raise ValueError("The model returned an invalid support assessment")
         if not value["supported"]:
             raise ValueError(value.get("unsupported_reason", "")[:300] or "Please state a specific, testable hypothesis")
-        missing = fields - set(value) - {"unsupported_reason"}
+        has_steps = "selection_steps" in value
+        optional = {"unsupported_reason"}
+        if has_steps:
+            optional.update(("metric", "rank_direction"))
+        missing = fields - set(value) - optional
         if missing:
             raise ValueError(
                 "The model returned an incomplete strategy plan"
@@ -95,7 +108,29 @@ class StrategyPlan:
             raise ValueError("Only the SP500 universe is currently supported")
         if value["rebalance"] not in ("monthly", "quarterly"):
             raise ValueError("Rebalancing must be monthly or quarterly")
-        if not isinstance(value["metric"], str) or value["metric"] not in METRICS or value["rank_direction"] not in ("highest", "lowest"):
+        steps = value.get("selection_steps", ())
+        if has_steps:
+            if not isinstance(steps, list) or not 1 <= len(steps) <= 6:
+                raise ValueError("The strategy needs 1-6 selection steps")
+            for index, step in enumerate(steps):
+                if not isinstance(step, dict) or step.get("operation") not in ("filter", "rank", "sample"):
+                    raise ValueError("Invalid selection step")
+                operation = step["operation"]
+                if operation == "filter":
+                    if (index == len(steps) - 1 or set(step) != {"operation", "feature", "comparison", "value"}
+                            or step["feature"] not in METRICS or step["comparison"] not in ("gt", "gte", "lt", "lte")
+                            or type(step["value"]) not in (int, float) or not isfinite(step["value"])):
+                        raise ValueError("Invalid selection filter")
+                elif index != len(steps) - 1:
+                    raise ValueError("Rank or sample must be the final selection step")
+                elif operation == "rank" and (set(step) != {"operation", "feature", "direction"}
+                        or step["feature"] not in METRICS or step["direction"] not in ("highest", "lowest")):
+                    raise ValueError("Invalid ranking step")
+                elif operation == "sample" and set(step) != {"operation"}:
+                    raise ValueError("Invalid sampling step")
+            if value["weighting"] == "model" or value["allow_short"]:
+                raise ValueError("Selection steps currently support long-only equal or market-cap weights")
+        elif not isinstance(value["metric"], str) or value["metric"] not in METRICS or value["rank_direction"] not in ("highest", "lowest"):
             raise ValueError("The requested signal is not supported by the available price data")
         if value["weighting"] not in ("equal", "model", "market_cap"):
             raise ValueError("Weighting must be equal, model suggested, or market cap")
@@ -108,15 +143,21 @@ class StrategyPlan:
                 raise ValueError(f"{key} must be 0-100 basis points")
         return cls(
             hypothesis.strip(), "SP500", value["top_n"], lookback_months,
-            value["rebalance"], value["metric"], value["rank_direction"],
+            value["rebalance"], value.get("metric", ""), value.get("rank_direction", ""),
             value["weighting"], value["allow_short"], value["fees_bps"],
-            value["slippage_bps"],
+            value["slippage_bps"], tuple(steps),
         )
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     def ranking_rule(self) -> str:
+        if self.selection_steps:
+            return " → ".join(
+                f"{step['comparison']} {step['value']} {METRICS[step['feature']]}" if step["operation"] == "filter"
+                else f"{step['direction']} {METRICS[step['feature']]}" if step["operation"] == "rank"
+                else "random sample" for step in self.selection_steps
+            )
         return f"{self.rank_direction} {METRICS[self.metric]} over {self.lookback_months} months"
 
 
@@ -135,12 +176,19 @@ PLAN_TOOL = _tool("submit_strategy_plan", "Submit a bounded strategy test plan",
         "rebalance": {"type": "string", "enum": ["monthly", "quarterly"]},
         "metric": {"type": "string", "enum": list(METRICS)},
         "rank_direction": {"type": "string", "enum": ["highest", "lowest"]},
+        "selection_steps": {"type": "array", "maxItems": 6, "items": {"type": "object", "properties": {
+            "operation": {"type": "string", "enum": ["filter", "rank", "sample"]},
+            "feature": {"type": "string", "enum": list(METRICS)},
+            "comparison": {"type": "string", "enum": ["gt", "gte", "lt", "lte"]},
+            "value": {"type": "number"},
+            "direction": {"type": "string", "enum": ["highest", "lowest"]},
+        }, "required": ["operation"], "additionalProperties": False}},
         "weighting": {"type": "string", "enum": ["equal", "model", "market_cap"]},
         "allow_short": {"type": "boolean"},
         "fees_bps": {"type": "integer", "minimum": 0, "maximum": 100},
         "slippage_bps": {"type": "integer", "minimum": 0, "maximum": 100},
     },
-    "required": ["supported", "unsupported_reason", "hypothesis", "universe", "top_n", "rebalance", "metric", "rank_direction", "weighting", "allow_short", "fees_bps", "slippage_bps"],
+    "required": ["supported", "unsupported_reason", "hypothesis", "universe", "top_n", "rebalance", "weighting", "allow_short", "fees_bps", "slippage_bps"],
     "additionalProperties": False,
 })
 

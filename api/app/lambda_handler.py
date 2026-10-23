@@ -1,4 +1,4 @@
-"""API Gateway HTTP API entry point; local development still uses Uvicorn."""
+"""API Gateway HTTP API entry point for the deployed Lambda."""
 
 import asyncio
 
