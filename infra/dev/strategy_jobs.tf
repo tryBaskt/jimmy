@@ -47,17 +47,17 @@ resource "aws_sqs_queue" "strategy_dead_letter" {
 resource "aws_sqs_queue" "strategy_jobs" {
   name                       = "jimmy-dev-strategy-jobs"
   receive_wait_time_seconds  = 20
-  visibility_timeout_seconds = 3600
+  visibility_timeout_seconds = 300
   sqs_managed_sse_enabled    = true
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.strategy_dead_letter.arn
-    maxReceiveCount     = 3
+    maxReceiveCount     = 1
   })
 }
 
 resource "aws_cloudwatch_metric_alarm" "strategy_dead_letter" {
   alarm_name          = "jimmy-dev-strategy-jobs-dlq"
-  alarm_description   = "A strategy job exhausted its retries."
+  alarm_description   = "A strategy worker stopped before acknowledging a job."
   namespace           = "AWS/SQS"
   metric_name         = "ApproximateNumberOfMessagesVisible"
   statistic           = "Maximum"

@@ -106,4 +106,10 @@ def get_job(request: Request, job_id: uuid.UUID) -> dict:
     if status == "failed":
         return {"job_id": str(job_id), "status": status,
                 "error": item.get("error", "Strategy run failed")}
+    if status == "retrying":
+        return {"job_id": str(job_id), "status": "failed",
+                "error": "This earlier run failed. Please submit a new strategy test."}
+    if status == "running" and int(item.get("lease_until", 0)) < int(time.time()):
+        return {"job_id": str(job_id), "status": "failed",
+                "error": "The strategy worker stopped before finishing. This is a service issue; please try later."}
     return {"job_id": str(job_id), "status": status}

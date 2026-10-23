@@ -67,6 +67,10 @@ class StrategyPlanError(ValueError):
     """A model plan that cannot be executed as a strategy."""
 
 
+class UnsupportedStrategyError(StrategyPlanError):
+    """A user request outside the strategy tester's supported capabilities."""
+
+
 @dataclass(frozen=True)
 class StrategyPlan:
     hypothesis: str
@@ -96,7 +100,10 @@ class StrategyPlan:
         if type(value.get("supported")) is not bool or not isinstance(value.get("unsupported_reason", ""), str):
             raise ValueError("The model returned an invalid support assessment")
         if not value["supported"]:
-            raise ValueError(value.get("unsupported_reason", "")[:300] or "Please state a specific, testable hypothesis")
+            raise UnsupportedStrategyError(
+                value.get("unsupported_reason", "")[:300]
+                or "Please state a specific, testable hypothesis"
+            )
         has_steps = "selection_steps" in value
         optional = {"unsupported_reason"}
         if has_steps:
@@ -252,7 +259,7 @@ class BedrockStrategyAgent:
                 **result,
             }
             if market_weight_requested and result["weighting"] != "market_cap":
-                raise ValueError("The model did not preserve the requested market-cap weighting")
+                raise StrategyPlanError("The model did not preserve the requested market-cap weighting")
         if isinstance(result, dict) and isinstance(result.get("selection_steps"), list):
             steps = [step.copy() if isinstance(step, dict) else step for step in result["selection_steps"]]
             if steps and isinstance(steps[-1], dict) and steps[-1].get("operation") == "rank":
@@ -263,6 +270,8 @@ class BedrockStrategyAgent:
             result = {**result, "selection_steps": steps}
         try:
             return StrategyPlan.from_model(result, lookback_months)
+        except StrategyPlanError:
+            raise
         except ValueError as error:
             raise StrategyPlanError(str(error)) from error
 

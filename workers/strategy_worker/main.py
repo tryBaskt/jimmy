@@ -13,9 +13,12 @@ from datetime import datetime, timedelta, timezone
 import boto3
 from botocore.exceptions import ClientError
 
-from packages.agents.strategy_agent.plan import BedrockStrategyAgent, StrategyPlanError
+from packages.agents.strategy_agent.plan import (
+    BedrockStrategyAgent, StrategyPlanError, UnsupportedStrategyError,
+)
 from packages.agents.strategy_agent.tools.dynamodb import list_universe_symbols
 from packages.agents.strategy_agent.tools.yfinance import (
+    MarketDataError,
     get_adjusted_close_prices,
     get_daily_prices_and_market_caps,
 )
@@ -24,6 +27,34 @@ from packages.agents.strategy_agent.workflow import run_strategy
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 stopping = threading.Event()
+LEASE_SECONDS = 300
+
+
+def _failure_explanation(error: Exception) -> str:
+    if isinstance(error, UnsupportedStrategyError):
+        reason = str(error).strip()
+        return (
+            f"This strategy is not supported: {reason}. "
+            "Try a specific price-based selection rule with monthly or quarterly rebalancing."
+        )[:300]
+    if isinstance(error, StrategyPlanError):
+        return (
+            "The strategy planner could not produce a valid test plan. State which price signal "
+            "to rank, the number of stocks, weighting, and rebalance period. "
+            "If you already did, this is a planner error."
+        )
+    if isinstance(error, MarketDataError):
+        return "Historical stock prices could not be loaded. This is a data-source issue; please try later."
+    if isinstance(error, ValueError):
+        detail = str(error)
+        if detail.startswith("Only ") and "stocks" in detail:
+            return f"{detail[:180]}. Try fewer stocks or a shorter lookback."
+        if detail.startswith("No valid rebalance dates"):
+            return "No rebalance dates had enough price history. Try a shorter lookback."
+        if detail.startswith(("The agent", "A portfolio", "Each position", "Model-suggested")):
+            return "The strategy model produced an invalid portfolio decision. This is a model error, not necessarily a prompt issue."
+        return "The strategy could not be backtested with the available data. Review the selection rule and lookback."
+    return "The strategy run failed because of a service error. This is not necessarily a prompt issue; please try later."
 
 
 def _stop(_number, _frame) -> None:
@@ -32,18 +63,19 @@ def _stop(_number, _frame) -> None:
 
 def _visibility_heartbeat(sqs, queue_url: str, receipt: str, job_id: str, jobs,
                           done: threading.Event) -> None:
-    while not done.wait(600) and not stopping.is_set():
+    while not done.wait(60) and not stopping.is_set():
         try:
             sqs.change_message_visibility(
-                QueueUrl=queue_url, ReceiptHandle=receipt, VisibilityTimeout=3600,
+                QueueUrl=queue_url, ReceiptHandle=receipt, VisibilityTimeout=LEASE_SECONDS,
             )
             jobs.update_item(
                 Key={"job_id": job_id},
                 UpdateExpression="SET lease_until = :lease",
                 ConditionExpression="#status = :running",
                 ExpressionAttributeNames={"#status": "status"},
-                ExpressionAttributeValues={":lease": int(time.time()) + 3600, ":running": "running"},
+                ExpressionAttributeValues={":lease": int(time.time()) + LEASE_SECONDS, ":running": "running"},
             )
+            logger.info("Renewed strategy job %s lease", job_id)
         except ClientError:
             logger.exception("Could not renew job lease for %s", job_id)
             return
@@ -59,16 +91,29 @@ def process_message(message: dict, *, session, jobs, sqs, queue_url: str,
         jobs.update_item(
             Key={"job_id": job_id},
             UpdateExpression="SET #status = :running, lease_until = :lease, attempts = :attempt",
-            ConditionExpression="#status IN (:queued, :retrying) OR (#status = :running AND lease_until < :now)",
+            ConditionExpression="#status = :queued",
             ExpressionAttributeNames={"#status": "status"},
             ExpressionAttributeValues={
-                ":running": "running", ":queued": "queued", ":retrying": "retrying",
-                ":lease": now + 3600, ":now": now, ":attempt": attempt,
+                ":running": "running", ":queued": "queued",
+                ":lease": now + LEASE_SECONDS, ":attempt": attempt,
             },
         )
     except jobs.meta.client.exceptions.ConditionalCheckFailedException:
         existing = jobs.get_item(Key={"job_id": job_id}, ConsistentRead=True).get("Item")
-        if not existing or existing["status"] in ("complete", "failed"):
+        if existing and existing["status"] == "retrying":
+            jobs.update_item(
+                Key={"job_id": job_id},
+                UpdateExpression="SET #status = :failed, #error = :error REMOVE lease_until, prompt",
+                ConditionExpression="#status = :retrying",
+                ExpressionAttributeNames={"#status": "status", "#error": "error"},
+                ExpressionAttributeValues={
+                    ":failed": "failed", ":retrying": "retrying",
+                    ":error": "This earlier run failed. Please submit a new strategy test.",
+                },
+            )
+            sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
+            logger.info("Closed legacy retrying strategy job %s", job_id)
+        elif not existing or existing["status"] in ("complete", "failed"):
             sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
             logger.info("Discarded completed strategy job message %s", job_id)
         return
@@ -107,29 +152,19 @@ def process_message(message: dict, *, session, jobs, sqs, queue_url: str,
         )
         sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
         logger.info("Completed strategy job %s", job_id)
-    except StrategyPlanError as error:
-        logger.warning("Strategy job %s has an invalid plan: %s", job_id, error)
+    except Exception as error:
+        logger.exception("Strategy job %s failed", job_id)
+        explanation = _failure_explanation(error)
         jobs.update_item(
             Key={"job_id": job_id},
-            UpdateExpression="SET #status = :failed, #error = :error REMOVE lease_until",
+            UpdateExpression="SET #status = :failed, #error = :error REMOVE lease_until, prompt",
             ExpressionAttributeNames={"#status": "status", "#error": "error"},
             ExpressionAttributeValues={
-                ":failed": "failed", ":error": str(error)[:300],
+                ":failed": "failed", ":error": explanation,
             },
         )
         sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
-    except Exception:
-        logger.exception("Strategy job %s failed on attempt %s", job_id, attempt)
-        jobs.update_item(
-            Key={"job_id": job_id},
-            UpdateExpression="SET #status = :status, #error = :error REMOVE lease_until",
-            ExpressionAttributeNames={"#status": "status", "#error": "error"},
-            ExpressionAttributeValues={
-                ":status": "failed" if attempt >= 3 else "retrying",
-                ":error": "Strategy run failed; check worker logs",
-            },
-        )
-        logger.info("Strategy job %s status=%s", job_id, "failed" if attempt >= 3 else "retrying")
+        logger.info("Strategy job %s status=failed reason=%s", job_id, explanation)
     finally:
         done.set()
         heartbeat.join(timeout=1)
