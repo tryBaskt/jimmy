@@ -17,6 +17,7 @@ from app.api.routes.auth import current_session, require_same_origin
 
 router = APIRouter(prefix="/strategy", tags=["strategy"])
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 STRATEGY_SCHEMA_VERSION = 3
 
 
@@ -78,6 +79,7 @@ def run(request: Request, body: StrategyRequest, response: Response) -> dict:
             },
         )
         raise HTTPException(status_code=502, detail="Could not queue strategy run") from error
+    logger.info("Queued strategy job %s lookback_months=%s", job_id, body.lookback_months)
     response.status_code = 202
     return {"job_id": job_id, "status": "queued"}
 

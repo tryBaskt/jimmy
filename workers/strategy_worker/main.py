@@ -70,7 +70,9 @@ def process_message(message: dict, *, session, jobs, sqs, queue_url: str,
         existing = jobs.get_item(Key={"job_id": job_id}, ConsistentRead=True).get("Item")
         if not existing or existing["status"] in ("complete", "failed"):
             sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
+            logger.info("Discarded completed strategy job message %s", job_id)
         return
+    logger.info("Started strategy job %s attempt=%s", job_id, attempt)
     done = threading.Event()
     heartbeat = threading.Thread(
         target=_visibility_heartbeat, args=(sqs, queue_url, receipt, job_id, jobs, done), daemon=True,
@@ -88,13 +90,15 @@ def process_message(message: dict, *, session, jobs, sqs, queue_url: str,
             ),
             price_loader=get_adjusted_close_prices,
             market_cap_loader=get_daily_prices_and_market_caps,
-            start=end - timedelta(days=365), end=end,
+            start=end - timedelta(days=365), end=end, job_id=job_id,
         )
+        logger.info("Strategy job %s report ready; uploading result", job_id)
         session.client("s3").put_object(
             Bucket=results_bucket, Key=f"jobs/{job_id}.json",
             Body=json.dumps({"schema_version": 3, **report}, allow_nan=False).encode(),
             ContentType="application/json",
         )
+        logger.info("Strategy job %s result uploaded; recording completion", job_id)
         jobs.update_item(
             Key={"job_id": job_id},
             UpdateExpression="SET #status = :complete REMOVE lease_until, prompt",
@@ -125,6 +129,7 @@ def process_message(message: dict, *, session, jobs, sqs, queue_url: str,
                 ":error": "Strategy run failed; check worker logs",
             },
         )
+        logger.info("Strategy job %s status=%s", job_id, "failed" if attempt >= 3 else "retrying")
     finally:
         done.set()
         heartbeat.join(timeout=1)
@@ -137,6 +142,7 @@ def main() -> None:
     sqs = session.client("sqs")
     jobs = session.resource("dynamodb").Table(os.environ["JIMMY_JOBS_TABLE"])
     queue_url = os.environ["JIMMY_JOBS_QUEUE_URL"]
+    logger.info("Strategy worker started; polling for jobs")
     while not stopping.is_set():
         response = sqs.receive_message(
             QueueUrl=queue_url, MaxNumberOfMessages=1, WaitTimeSeconds=20,

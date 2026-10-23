@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import random
+import time
 from datetime import datetime, timedelta
 from math import isfinite, sqrt
 from typing import Any, Callable
@@ -16,6 +18,8 @@ from packages.agent_harness.runtime import RunContext, RunRecord, ToolRegistry
 
 from .tools.backtest import replay_portfolios
 from .plan import StrategyPlan
+
+logger = logging.getLogger(__name__)
 
 
 def _signal_values(metric: str, window: pd.DataFrame, spy: pd.Series) -> pd.Series:
@@ -87,6 +91,7 @@ def run_strategy(
     market_cap_loader: Callable[[list[str], datetime, datetime], pd.DataFrame] | None = None,
     include_replay_prices: bool = False,
     random_seed: int | None = None,
+    job_id: str | None = None,
 ) -> dict:
     """Run a price-based test while keeping each agent decision behind its cutoff."""
     if start.tzinfo is None or end.tzinfo is None or end <= start or end - start < timedelta(days=90):
@@ -94,6 +99,15 @@ def run_strategy(
     context = RunContext(as_of=end, max_tool_calls=3 if market_cap_loader else 2)
     record = RunRecord(context.run_id)
     tools = ToolRegistry(record)
+    started_at = time.monotonic()
+    trace_id = job_id or context.run_id
+
+    def progress(stage: str, **details: object) -> None:
+        fields = " ".join(f"{key}={value}" for key, value in details.items())
+        logger.info("Strategy job %s stage=%s elapsed_s=%.1f %s",
+                    trace_id, stage, time.monotonic() - started_at, fields)
+
+    progress("planning", lookback_months=lookback_months)
 
     def read_universe(_context: RunContext, arguments: dict) -> list[str]:
         if set(arguments) != {"universe"} or not isinstance(arguments["universe"], str):
@@ -132,13 +146,17 @@ def run_strategy(
             lambda result: {"rows": len(result)},
         )
     plan = agent.plan(prompt, lookback_months)
+    progress("plan_ready", rebalance=plan.rebalance, weighting=plan.weighting,
+             holdings=plan.top_n, rule=plan.ranking_rule())
     if plan.weighting == "market_cap" and market_cap_loader is None:
         raise ValueError("Market-cap weighting requires a historical market-cap data loader")
     record.add(
         "strategy_plan", as_of=end,
         details={"model_id": getattr(agent, "model_id", "unknown"), "plan": plan.to_dict()},
     )
+    progress("loading_universe", universe=plan.universe)
     symbols = sorted(set(tools.call("read_universe", context, {"universe": plan.universe})) - {"SPY"})
+    progress("universe_ready", symbols=len(symbols))
     if not symbols:
         raise ValueError("The selected universe contains no stocks")
     if random_seed is not None and (type(random_seed) is not int or random_seed < 0):
@@ -152,6 +170,8 @@ def run_strategy(
     fetch_start = (
         pd.Timestamp(start) - pd.DateOffset(months=plan.lookback_months) - pd.Timedelta(days=45)
     ).to_pydatetime()
+    progress("loading_prices", symbols=len(symbols) + 1,
+             start=fetch_start.date(), end=end.date())
     raw = tools.call(
         "read_prices", context,
         {"symbols": symbols + ["SPY"], "start": fetch_start.isoformat(), "end": end.isoformat()},
@@ -167,6 +187,7 @@ def run_strategy(
     excluded = sorted(set(symbols) - set(eligible))
     if len(eligible) < plan.top_n:
         raise ValueError(f"Only {len(eligible)} stocks have complete prices; need {plan.top_n}")
+    progress("prices_ready", trading_days=len(raw), eligible=len(eligible), excluded=len(excluded))
     prices = raw[eligible].astype("float64")
     spy = raw["SPY"].astype("float64")
     period = prices.index.tz_convert("UTC").tz_localize(None).to_period(
@@ -186,6 +207,8 @@ def run_strategy(
             first = prices.index.searchsorted(cutoff, side="right") - 1
             if first < 0:
                 continue
+        progress("rebalance_start", number=len(decisions) + 1,
+                 signal_date=signal_date.date(), execute_date=execute_date.date())
         if plan.selection_steps:
             candidates_symbols = eligible.copy()
             feature_cache = {}
@@ -227,6 +250,8 @@ def run_strategy(
             ranked = values.sort_values(ascending=plan.rank_direction == "lowest", kind="stable")
             shortlist = ranked.head(max(60, plan.top_n * 3))
             candidates = [{"symbol": symbol, "signal": round(float(value), 8)} for symbol, value in shortlist.items()]
+            progress("decision_model_start", signal_date=signal_date.date(),
+                     candidates=len(candidates))
             raw_decision = agent.decide(plan, signal_date.date().isoformat(), candidates)
             positions = _validate_decision(raw_decision, plan, set(shortlist.index))
         record.add(
@@ -246,14 +271,18 @@ def run_strategy(
             "symbols": [position["symbol"] for position in positions],
             "candidate_count": len(candidates),
         })
+        progress("rebalance_ready", number=len(decisions), candidates=len(candidates),
+                 positions=len(positions))
     if not decisions:
         raise ValueError("No valid rebalance dates in the selected period")
+    progress("decisions_ready", rebalances=len(decisions))
     market_cap_digest = None
     used_market_cap_fallback = False
     if plan.weighting == "market_cap":
         selected = sorted({
             position["symbol"] for decision in decisions for position in decision["positions"]
         })
+        progress("loading_market_caps", symbols=len(selected))
         caps = tools.call(
             "read_market_caps", context,
             {"symbols": selected, "start": fetch_start.isoformat(), "end": end.isoformat()},
@@ -270,6 +299,7 @@ def run_strategy(
             caps[["market_cap"]].to_csv(float_format="%.12g").encode()
         ).hexdigest()
         available_symbols = set(caps.index.get_level_values("symbol"))
+        fallback_positions = 0
         for decision in decisions:
             signal_day = pd.Timestamp(decision["signal_date"]).date()
             selected_caps = []
@@ -285,6 +315,7 @@ def run_strategy(
                             cap = float(value)
                 selected_caps.append(cap)
             missing_count = sum(cap is None for cap in selected_caps)
+            fallback_positions += missing_count
             used_market_cap_fallback |= missing_count > 0
             fallback_weight = 1 / len(selected_caps)
             remaining_weight = 1 - missing_count * fallback_weight
@@ -307,16 +338,20 @@ def run_strategy(
                     ],
                 },
             )
+        progress("market_caps_ready", rows=len(caps), fallback_positions=fallback_positions)
     evaluation = prices.index[(prices.index >= start) & (prices.index < end)]
     if len(evaluation) < 20:
         raise ValueError("Insufficient trading days for a backtest")
     used_symbols = sorted({position["symbol"] for decision in decisions for position in decision["positions"]})
     replay_prices = prices.loc[evaluation, used_symbols].copy()
     replay_spy = spy.loc[evaluation].copy()
+    progress("backtest_start", trading_days=len(evaluation), symbols=len(used_symbols),
+             rebalances=len(decisions))
     simulation = replay_portfolios(
         replay_prices, replay_spy, decisions,
         fees_bps=plan.fees_bps, slippage_bps=plan.slippage_bps,
     )
+    progress("backtest_ready", curve_points=len(simulation["performance_curve"]))
     snapshot = pd.concat([replay_prices, replay_spy.rename("SPY")], axis=1)
     digest = hashlib.sha256(snapshot.to_csv(float_format="%.12g").encode()).hexdigest()
     record.add("price_snapshot", as_of=end, details={"sha256": digest})
@@ -355,4 +390,5 @@ def run_strategy(
             for day, row in snapshot.iterrows()
         ]
     json.dumps(report, allow_nan=False)
+    progress("report_ready", rebalances=len(decisions))
     return report

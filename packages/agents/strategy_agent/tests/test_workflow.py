@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import logging
 
 import pandas as pd
 import pytest
@@ -8,7 +9,7 @@ from packages.agents.strategy_agent.plan import StrategyPlan
 from packages.agents.strategy_agent.workflow import run_strategy
 
 
-def test_rebalance_uses_prior_close_and_saved_decisions_replay():
+def test_rebalance_uses_prior_close_and_saved_decisions_replay(caplog):
     dates = pd.bdate_range("2025-01-01", "2025-07-01", tz="UTC")
     prices = pd.DataFrame({
         "AAA": [100 + i * 0.2 for i in range(len(dates))],
@@ -29,14 +30,22 @@ def test_rebalance_uses_prior_close_and_saved_decisions_replay():
             return {"positions": [{"symbol": "AAA", "direction": "long",
                                     "weight": 1, "reason": "Highest prior return"}]}
 
-    report = run_strategy(
-        prompt="Buy the strongest prior performer", lookback_months=1,
-        agent=Agent(), universe_loader=lambda _: ["AAA", "BBB"],
-        price_loader=lambda symbols, start, end: prices,
-        start=datetime(2025, 3, 1, tzinfo=timezone.utc),
-        end=datetime(2025, 7, 1, tzinfo=timezone.utc),
-        include_replay_prices=True,
-    )
+    with caplog.at_level(logging.INFO, logger="packages.agents.strategy_agent.workflow"):
+        report = run_strategy(
+            prompt="Buy the strongest prior performer", lookback_months=1,
+            agent=Agent(), universe_loader=lambda _: ["AAA", "BBB"],
+            price_loader=lambda symbols, start, end: prices,
+            start=datetime(2025, 3, 1, tzinfo=timezone.utc),
+            end=datetime(2025, 7, 1, tzinfo=timezone.utc),
+            include_replay_prices=True,
+            job_id="test-job",
+        )
+    assert "Strategy job test-job stage=planning" in caplog.text
+    assert "stage=prices_ready" in caplog.text
+    assert "stage=rebalance_ready" in caplog.text
+    assert "stage=backtest_ready" in caplog.text
+    assert "stage=report_ready" in caplog.text
+    assert "Buy the strongest prior performer" not in caplog.text
     assert report["decisions"][0]["signal_date"] < report["decisions"][0]["rebalance_date"]
     assert report["decisions"][0]["lookback_start"] < report["decisions"][0]["signal_date"]
     assert len(report["decisions"]) == 4
