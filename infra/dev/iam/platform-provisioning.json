@@ -31,13 +31,13 @@
     {
       "Sid": "ManageDevCognito",
       "Effect": "Allow",
-      "Action": ["cognito-idp:CreateUserPool", "cognito-idp:DescribeUserPool", "cognito-idp:UpdateUserPool", "cognito-idp:DeleteUserPool", "cognito-idp:CreateUserPoolClient", "cognito-idp:DescribeUserPoolClient", "cognito-idp:UpdateUserPoolClient", "cognito-idp:DeleteUserPoolClient", "cognito-idp:CreateUserPoolDomain", "cognito-idp:DescribeUserPoolDomain", "cognito-idp:UpdateUserPoolDomain", "cognito-idp:DeleteUserPoolDomain", "cognito-idp:CreateManagedLoginBranding", "cognito-idp:DescribeManagedLoginBranding", "cognito-idp:DescribeManagedLoginBrandingByClient", "cognito-idp:UpdateManagedLoginBranding", "cognito-idp:DeleteManagedLoginBranding", "cognito-idp:ListTagsForResource", "cognito-idp:TagResource", "cognito-idp:UntagResource"],
+      "Action": ["cognito-idp:CreateUserPool", "cognito-idp:DescribeUserPool", "cognito-idp:GetUserPoolMfaConfig", "cognito-idp:UpdateUserPool", "cognito-idp:DeleteUserPool", "cognito-idp:CreateUserPoolClient", "cognito-idp:DescribeUserPoolClient", "cognito-idp:UpdateUserPoolClient", "cognito-idp:DeleteUserPoolClient", "cognito-idp:CreateUserPoolDomain", "cognito-idp:DescribeUserPoolDomain", "cognito-idp:UpdateUserPoolDomain", "cognito-idp:DeleteUserPoolDomain", "cognito-idp:CreateManagedLoginBranding", "cognito-idp:DescribeManagedLoginBranding", "cognito-idp:DescribeManagedLoginBrandingByClient", "cognito-idp:UpdateManagedLoginBranding", "cognito-idp:DeleteManagedLoginBranding", "cognito-idp:ListTagsForResource", "cognito-idp:TagResource", "cognito-idp:UntagResource"],
       "Resource": "*"
     },
     {
       "Sid": "WorkerNetwork",
       "Effect": "Allow",
-      "Action": ["ec2:CreateVpc", "ec2:DeleteVpc", "ec2:ModifyVpcAttribute", "ec2:DescribeVpcs", "ec2:CreateSubnet", "ec2:DeleteSubnet", "ec2:DescribeSubnets", "ec2:ModifySubnetAttribute", "ec2:CreateInternetGateway", "ec2:DeleteInternetGateway", "ec2:AttachInternetGateway", "ec2:DetachInternetGateway", "ec2:DescribeInternetGateways", "ec2:CreateRouteTable", "ec2:DeleteRouteTable", "ec2:DescribeRouteTables", "ec2:CreateRoute", "ec2:DeleteRoute", "ec2:AssociateRouteTable", "ec2:DisassociateRouteTable", "ec2:CreateSecurityGroup", "ec2:DeleteSecurityGroup", "ec2:DescribeSecurityGroups", "ec2:AuthorizeSecurityGroupEgress", "ec2:RevokeSecurityGroupEgress", "ec2:CreateTags", "ec2:DeleteTags", "ec2:DescribeTags", "ec2:DescribeNetworkInterfaces", "ec2:DescribeAvailabilityZones"],
+      "Action": ["ec2:CreateVpc", "ec2:DeleteVpc", "ec2:ModifyVpcAttribute", "ec2:DescribeVpcAttribute", "ec2:DescribeVpcs", "ec2:CreateSubnet", "ec2:DeleteSubnet", "ec2:DescribeSubnets", "ec2:ModifySubnetAttribute", "ec2:CreateInternetGateway", "ec2:DeleteInternetGateway", "ec2:AttachInternetGateway", "ec2:DetachInternetGateway", "ec2:DescribeInternetGateways", "ec2:CreateRouteTable", "ec2:DeleteRouteTable", "ec2:DescribeRouteTables", "ec2:CreateRoute", "ec2:DeleteRoute", "ec2:AssociateRouteTable", "ec2:DisassociateRouteTable", "ec2:CreateSecurityGroup", "ec2:DeleteSecurityGroup", "ec2:DescribeSecurityGroups", "ec2:AuthorizeSecurityGroupEgress", "ec2:RevokeSecurityGroupEgress", "ec2:CreateTags", "ec2:DeleteTags", "ec2:DescribeTags", "ec2:DescribeNetworkInterfaces", "ec2:DescribeAvailabilityZones"],
       "Resource": "*"
     },
     {
@@ -59,7 +59,7 @@
       "Resource": "arn:aws:cloudwatch:us-east-1:499133675835:alarm:jimmy-dev-strategy-jobs-dlq"
     },
     {
-      "Sid": "ManageOnlyDevRuntimePolicies",
+      "Sid": "RuntimePolicies",
       "Effect": "Allow",
       "Action": ["iam:CreatePolicy", "iam:GetPolicy", "iam:GetPolicyVersion", "iam:ListPolicyVersions", "iam:CreatePolicyVersion", "iam:DeletePolicyVersion", "iam:DeletePolicy", "iam:TagPolicy", "iam:UntagPolicy"],
       "Resource": [
@@ -68,7 +68,7 @@
       ]
     },
     {
-      "Sid": "CreateBoundedDevWorkerRoles",
+      "Sid": "CreateWorkerRoles",
       "Effect": "Allow",
       "Action": "iam:CreateRole",
       "Resource": [
@@ -81,7 +81,7 @@
       ] } }
     },
     {
-      "Sid": "ManageOnlyDevWorkerRoles",
+      "Sid": "WorkerRoles",
       "Effect": "Allow",
       "Action": ["iam:GetRole", "iam:DeleteRole", "iam:UpdateAssumeRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies", "iam:ListInstanceProfilesForRole", "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:TagRole", "iam:UntagRole"],
       "Resource": [
@@ -97,7 +97,7 @@
       "Condition": { "StringEquals": { "iam:PermissionsBoundary": "arn:aws:iam::499133675835:policy/jimmy-dev-backend-boundary" } }
     },
     {
-      "Sid": "PassOnlyDevRuntimeRoles",
+      "Sid": "PassRuntimeRoles",
       "Effect": "Allow",
       "Action": "iam:PassRole",
       "Resource": [
