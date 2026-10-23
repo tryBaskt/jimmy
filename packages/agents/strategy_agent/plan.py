@@ -24,8 +24,10 @@ Sample draws top_n different stocks uniformly from the eligible universe;
 use it for random-selection hypotheses. Never replace sampling with ranking.
 Filters use comparison gt/gte/lt/lte and a numeric value. Rank uses feature
 and direction highest/lowest. Sample needs only operation=sample. Selection
-steps support long-only equal or market-cap weights. For selection_steps omit
-metric and rank_direction. The available signals are trailing price return, realized volatility,
+steps support long-only equal or market-cap weights. For a rank selection_step,
+also set metric and rank_direction to its feature and direction. For a sample
+step, use metric=trailing_return and rank_direction=highest; those fields are
+ignored for sampling. The available signals are trailing price return, realized volatility,
 drawdown from a period high, distance from the period average price, and beta
 to SPY. The available universe is current SP500 membership. Rebalancing may
 be monthly or quarterly. The user's separate lookback-months control takes
@@ -59,6 +61,10 @@ METRICS = {
     "moving_average_gap": "distance from average price",
     "market_beta": "beta to SPY",
 }
+
+
+class StrategyPlanError(ValueError):
+    """A model plan that cannot be executed as a strategy."""
 
 
 @dataclass(frozen=True)
@@ -188,7 +194,7 @@ PLAN_TOOL = _tool("submit_strategy_plan", "Submit a bounded strategy test plan",
         "fees_bps": {"type": "integer", "minimum": 0, "maximum": 100},
         "slippage_bps": {"type": "integer", "minimum": 0, "maximum": 100},
     },
-    "required": ["supported", "unsupported_reason", "hypothesis", "universe", "top_n", "rebalance", "weighting", "allow_short", "fees_bps", "slippage_bps"],
+    "required": ["supported", "unsupported_reason", "hypothesis", "universe", "top_n", "rebalance", "metric", "rank_direction", "weighting", "allow_short", "fees_bps", "slippage_bps"],
     "additionalProperties": False,
 })
 
@@ -247,7 +253,18 @@ class BedrockStrategyAgent:
             }
             if market_weight_requested and result["weighting"] != "market_cap":
                 raise ValueError("The model did not preserve the requested market-cap weighting")
-        return StrategyPlan.from_model(result, lookback_months)
+        if isinstance(result, dict) and isinstance(result.get("selection_steps"), list):
+            steps = [step.copy() if isinstance(step, dict) else step for step in result["selection_steps"]]
+            if steps and isinstance(steps[-1], dict) and steps[-1].get("operation") == "rank":
+                if "feature" not in steps[-1] and result.get("metric") in METRICS:
+                    steps[-1]["feature"] = result["metric"]
+                if "direction" not in steps[-1] and result.get("rank_direction") in ("highest", "lowest"):
+                    steps[-1]["direction"] = result["rank_direction"]
+            result = {**result, "selection_steps": steps}
+        try:
+            return StrategyPlan.from_model(result, lookback_months)
+        except ValueError as error:
+            raise StrategyPlanError(str(error)) from error
 
     def decide(self, plan: StrategyPlan, signal_date: str, signals: list[dict]) -> dict:
         import json

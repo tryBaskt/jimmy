@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 import boto3
 from botocore.exceptions import ClientError
 
-from packages.agents.strategy_agent.plan import BedrockStrategyAgent
+from packages.agents.strategy_agent.plan import BedrockStrategyAgent, StrategyPlanError
 from packages.agents.strategy_agent.tools.dynamodb import list_universe_symbols
 from packages.agents.strategy_agent.tools.yfinance import (
     get_adjusted_close_prices,
@@ -103,6 +103,17 @@ def process_message(message: dict, *, session, jobs, sqs, queue_url: str,
         )
         sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
         logger.info("Completed strategy job %s", job_id)
+    except StrategyPlanError as error:
+        logger.warning("Strategy job %s has an invalid plan: %s", job_id, error)
+        jobs.update_item(
+            Key={"job_id": job_id},
+            UpdateExpression="SET #status = :failed, #error = :error REMOVE lease_until",
+            ExpressionAttributeNames={"#status": "status", "#error": "error"},
+            ExpressionAttributeValues={
+                ":failed": "failed", ":error": str(error)[:300],
+            },
+        )
+        sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt)
     except Exception:
         logger.exception("Strategy job %s failed on attempt %s", job_id, attempt)
         jobs.update_item(

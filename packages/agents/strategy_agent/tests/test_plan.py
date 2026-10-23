@@ -67,6 +67,19 @@ def test_complete_random_hypothesis_uses_generic_sampling_step():
     assert plan.ranking_rule() == "random sample"
 
 
+def test_rank_uses_validated_top_level_metric_when_model_omits_step_feature():
+    agent = BedrockStrategyAgent(session=Mock(), model_id="test")
+    agent._ask = lambda *args: {
+        "metric": "trailing_return", "rank_direction": "highest",
+        "selection_steps": [{"operation": "rank", "direction": "highest"}],
+    }
+    plan = agent.plan("Buy the strongest momentum stocks monthly", 3)
+    assert plan.selection_steps == ({
+        "operation": "rank", "feature": "trailing_return", "direction": "highest",
+    },)
+    assert plan.ranking_rule() == "highest price return"
+
+
 def test_selection_steps_reject_unavailable_operations():
     with pytest.raises(ValueError, match="Invalid selection step"):
         StrategyPlan.from_model(model_plan(selection_steps=[{"operation": "execute_python"}]), 2)
