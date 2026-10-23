@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import Mock
 
-from packages.agents.strategy_agent.plan import BedrockStrategyAgent, StrategyPlan
+from packages.agents.strategy_agent.plan import BedrockStrategyAgent, PLAN_TOOL, StrategyPlan
 
 
 def model_plan(**overrides):
@@ -64,7 +64,22 @@ def test_complete_random_hypothesis_uses_generic_sampling_step():
     }
     plan = agent.plan("Choose 15 S&P 500 stocks randomly each month", 2)
     assert plan.selection_steps == ({"operation": "sample"},)
+    assert plan.metric == ""
     assert plan.ranking_rule() == "random sample"
+    assert "metric" not in PLAN_TOOL["toolSpec"]["inputSchema"]["json"]["required"]
+
+
+def test_non_return_signal_does_not_require_trailing_return():
+    agent = BedrockStrategyAgent(session=Mock(), model_id="test")
+    agent._ask = lambda *args: {
+        "top_n": 10,
+        "selection_steps": [{
+            "operation": "rank", "feature": "realized_volatility", "direction": "lowest",
+        }],
+    }
+    plan = agent.plan("Buy the ten least volatile S&P 500 stocks each month", 3)
+    assert plan.metric == ""
+    assert plan.ranking_rule() == "lowest return volatility"
 
 
 def test_rank_uses_validated_top_level_metric_when_model_omits_step_feature():

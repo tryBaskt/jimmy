@@ -25,9 +25,10 @@ use it for random-selection hypotheses. Never replace sampling with ranking.
 Filters use comparison gt/gte/lt/lte and a numeric value. Rank uses feature
 and direction highest/lowest. Sample needs only operation=sample. Selection
 steps support long-only equal or market-cap weights. For a rank selection_step,
-also set metric and rank_direction to its feature and direction. For a sample
-step, use metric=trailing_return and rank_direction=highest; those fields are
-ignored for sampling. The available signals are trailing price return, realized volatility,
+set metric and rank_direction to its feature and direction when possible; the
+rank step's own feature and direction are authoritative. For a sample step,
+omit metric and rank_direction because sampling uses no price signal. The
+available signals are trailing price return, realized volatility,
 drawdown from a period high, distance from the period average price, and beta
 to SPY. The available universe is current SP500 membership. Rebalancing may
 be monthly or quarterly. The user's separate lookback-months control takes
@@ -201,7 +202,7 @@ PLAN_TOOL = _tool("submit_strategy_plan", "Submit a bounded strategy test plan",
         "fees_bps": {"type": "integer", "minimum": 0, "maximum": 100},
         "slippage_bps": {"type": "integer", "minimum": 0, "maximum": 100},
     },
-    "required": ["supported", "unsupported_reason", "hypothesis", "universe", "top_n", "rebalance", "metric", "rank_direction", "weighting", "allow_short", "fees_bps", "slippage_bps"],
+    "required": ["supported", "unsupported_reason", "hypothesis", "universe", "top_n", "rebalance", "weighting", "allow_short", "fees_bps", "slippage_bps"],
     "additionalProperties": False,
 })
 
