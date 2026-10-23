@@ -11,7 +11,9 @@ from packages.agent_harness.bedrock import BedrockStructuredClient
 
 PLAN_INSTRUCTIONS = """Determine whether the user has given a complete,
 testable trading hypothesis. If so, translate it faithfully into a strategy
-plan using the supplied lookback and the available tool schema. Preserve the
+plan using the supplied lookback and the available tool schema. Do not search
+for the best-performing rule or invent an investment hypothesis. Reject vague
+requests to discover whichever signal worked best. Preserve the
 user's selection, weighting, and rebalance rules; do not invent a hypothesis.
 If the hypothesis cannot be tested with the available data and operations,
 set supported=false and briefly explain what is missing. Return exactly one
