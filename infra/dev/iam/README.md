@@ -9,7 +9,7 @@ The version-controlled policies are:
 
 | File | Inline policy name | Scope |
 |---|---|---|
-| `dynamodb-provisioning.json` | `jimmy-dev-dynamodb-provisioning` | Lifecycle, describe, and tagging for the four dev DynamoDB tables |
+| `dynamodb-provisioning.json` | `jimmy-dev-dynamodb-provisioning` | Lifecycle, describe, and tagging for the five dev DynamoDB tables |
 | `fmp-secret-provisioning.json` | `jimmy-dev-fmp-secret-provisioning` | Describe/update/tag metadata for the exact imported FMP secret; no secret-value reads |
 | `terraform-state.json` | `jimmy-dev-terraform-state` | Bootstrap/configure the dedicated state bucket and read/write the exact state and lock objects |
 | `application-provisioning.json` | `jimmy-dev-application-provisioning` (customer-managed) | Existing API Lambda, API Gateway, frontend bucket, and CloudFront |

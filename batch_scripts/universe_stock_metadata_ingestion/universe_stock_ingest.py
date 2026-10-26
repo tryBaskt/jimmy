@@ -450,7 +450,10 @@ def connect_dynamodb(profile: str | None, region: str):
             for field in description["AttributeDefinitions"]
         }
         if schema != keys or any(types.get(key) != "S" for key in keys):
-            raise IngestionError(f"Unexpected key schema on {name}")
+            raise IngestionError(
+                f"Unexpected key schema on {name}. This legacy current-symbol ingestion "
+                "cannot write security-ID historical tables; use historical_stock_ingestion."
+            )
         if description["TableStatus"] != "ACTIVE":
             raise IngestionError(f"Table {name} must be ACTIVE before ingestion")
     return dynamodb
