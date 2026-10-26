@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import {
   getAuthState, getHealth, getStrategyCapabilities, runStrategy, signOut,
-  type AuthState, type Health, type StrategyResult,
+  type AuthState, type Health, type StrategyCapabilities, type StrategyResult,
 } from './api/client'
 import './App.css'
 
@@ -9,6 +9,18 @@ const examplePrompt = 'Find the strongest momentum stocks in the S&P 500 at each
 
 const percent = (value: number) => `${value >= 0 ? '+' : ''}${(value * 100).toFixed(1)}%`
 const signed = (value: number | null) => value === null ? '—' : value.toFixed(2)
+const isoDate = (date: Date) => date.toISOString().slice(0, 10)
+const defaultToday = isoDate(new Date())
+const oneYearBefore = (value: string) => {
+  const date = new Date(`${value}T00:00:00Z`)
+  date.setUTCFullYear(date.getUTCFullYear() - 1)
+  return isoDate(date)
+}
+const inclusiveEnd = (exclusive: string) => {
+  const date = new Date(`${exclusive}T00:00:00Z`)
+  date.setUTCDate(date.getUTCDate() - 1)
+  return isoDate(date)
+}
 
 function PerformanceChart({ points }: { points: StrategyResult['performance_curve'] }) {
   if (points.length < 2) return null
@@ -50,7 +62,7 @@ function Results({ result }: { result: StrategyResult }) {
         <div><p className="eyebrow">RESEARCH REPORT</p><h2 id="results-title">Strategy, tested.</h2></div>
         <span className="result-tag">{result.plan.universe} · {result.plan.rebalance} · {result.plan.weighting === 'equal' ? 'equal weight' : result.plan.weighting === 'market_cap' ? 'market-cap weight' : 'model weight'}</span>
       </div>
-      <p className="results-lede">{result.plan.hypothesis} At each {result.plan.rebalance} rebalance, the saved selection plan chose stocks using information available at the prior close. The recorded decisions were replayed from {result.start} to {result.end_exclusive}.</p>
+      <p className="results-lede">{result.plan.hypothesis} At each {result.plan.rebalance} rebalance, the saved selection plan chose stocks using information available at the prior close. The recorded decisions were replayed from {result.start} to {inclusiveEnd(result.end_exclusive)}{result.selected_sectors.length ? ` within ${result.selected_sectors.join(', ')}` : ' across all sectors'}.</p>
 
       <div className="metrics-grid">
         <article className="metric primary-metric"><span>Strategy return</span><strong>{percent(result.strategy.total_return)}</strong><small>Full backtest</small></article>
@@ -60,7 +72,7 @@ function Results({ result }: { result: StrategyResult }) {
       </div>
 
       <div className="report-panel">
-        <div className="panel-heading"><div><h3>Backtest growth</h3><p>Growth of $1 over the backtest period</p></div><span>{result.start} – {result.end_exclusive}</span></div>
+        <div className="panel-heading"><div><h3>Backtest growth</h3><p>Growth of $1 over the backtest period</p></div><span>{result.start} – {inclusiveEnd(result.end_exclusive)}</span></div>
         <PerformanceChart points={result.performance_curve} />
       </div>
 
@@ -82,7 +94,7 @@ function Results({ result }: { result: StrategyResult }) {
         </section>
       </div>
 
-      <div className="report-note"><strong>How to read this result</strong><p>{result.eligible_symbol_count} of {result.universe_symbol_count} current universe symbols had complete price history. Costs are {result.plan.fees_bps} bps in fees and {result.plan.slippage_bps} bps in slippage per order.</p><p>{result.limitations[0]}</p>{result.excluded_symbols.length > 0 && <p>Excluded for missing prices: {result.excluded_symbols.join(', ')}.</p>}</div>
+      <div className="report-note"><strong>How to read this result</strong><p>{result.eligible_symbol_count} of {result.universe_symbol_count} filtered universe symbols had complete price history. Jimmy fetched prices from {result.lookback_data_start} to support the {result.plan.lookback_months}-month signal, while performance covers only the selected dates. Costs are {result.plan.fees_bps} bps in fees and {result.plan.slippage_bps} bps in slippage per order.</p><p>{result.limitations[0]}</p>{result.excluded_symbols.length > 0 && <p>Excluded for missing prices: {result.excluded_symbols.join(', ')}.</p>}</div>
     </section>
   )
 }
@@ -90,25 +102,37 @@ function Results({ result }: { result: StrategyResult }) {
 export default function App() {
   const [health, setHealth] = useState<Health | null>(null)
   const [auth, setAuth] = useState<AuthState | null>(null)
-  const [available, setAvailable] = useState<boolean | null>(null)
+  const [capabilities, setCapabilities] = useState<StrategyCapabilities | null>(null)
   const [connectionError, setConnectionError] = useState('')
   const [prompt, setPrompt] = useState(examplePrompt)
   const [lookbackInput, setLookbackInput] = useState('3')
+  const [startDate, setStartDate] = useState(oneYearBefore(defaultToday))
+  const [endDate, setEndDate] = useState(defaultToday)
+  const [selectedSectors, setSelectedSectors] = useState<string[]>([])
   const [result, setResult] = useState<StrategyResult | null>(null)
   const [runError, setRunError] = useState('')
   const [running, setRunning] = useState(false)
   const runController = useRef<AbortController | null>(null)
   const lookbackMonths = Number(lookbackInput)
   const validLookback = Number.isInteger(lookbackMonths) && lookbackMonths >= 1 && lookbackMonths <= 12
+  const durationDays = (Date.parse(`${endDate}T00:00:00Z`) - Date.parse(`${startDate}T00:00:00Z`)) / 86400000
+  const validDates = Boolean(startDate && endDate) && durationDays >= 90 &&
+    (!capabilities || (startDate >= capabilities.earliest_start_date && endDate <= capabilities.latest_end_date))
 
   useEffect(() => {
     const controller = new AbortController()
     Promise.all([getHealth(controller.signal), getStrategyCapabilities(controller.signal), getAuthState(controller.signal)])
-      .then(([service, enabled, session]) => { if (!controller.signal.aborted) { setHealth(service); setAvailable(enabled); setAuth(session) } })
+      .then(([service, strategyCapabilities, session]) => {
+        if (!controller.signal.aborted) {
+          setHealth(service); setCapabilities(strategyCapabilities); setAuth(session)
+          setEndDate(strategyCapabilities.latest_end_date)
+          setStartDate(oneYearBefore(strategyCapabilities.latest_end_date))
+        }
+      })
       .catch((reason: unknown) => {
         if (!controller.signal.aborted) {
           setConnectionError(reason instanceof Error ? reason.message : 'Connection failed')
-          setAvailable(false)
+          setCapabilities(null)
         }
       })
     return () => { controller.abort(); runController.current?.abort() }
@@ -116,14 +140,14 @@ export default function App() {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!available || auth?.mode !== 'signed_in' || running || !prompt.trim() || !validLookback) return
+    if (!capabilities?.enabled || auth?.mode !== 'signed_in' || running || !prompt.trim() || !validLookback || !validDates) return
     const controller = new AbortController()
     runController.current = controller
     setRunning(true)
     setRunError('')
     setResult(null)
     try {
-      setResult(await runStrategy(prompt.trim(), lookbackMonths, controller.signal))
+      setResult(await runStrategy(prompt.trim(), lookbackMonths, selectedSectors, startDate, endDate, controller.signal))
     } catch (reason) {
       if (!controller.signal.aborted) setRunError(reason instanceof Error ? reason.message : 'Research failed')
     } finally {
@@ -135,7 +159,7 @@ export default function App() {
   return (
     <main>
       <header className="site-header"><div className="brand"><span className="brand-mark">J</span><span>jimmy<span className="brand-dot">.</span></span></div><div className="header-right"><span className="header-label">Strategy testing</span>{auth?.mode === 'signed_out' && <><a href="/api/auth/login">Sign in</a><a href="/api/auth/signup">Sign up</a></>}{auth?.mode === 'signed_in' && <><span>{auth.email}</span><button type="button" onClick={() => { void signOut().then(() => setAuth({ mode: 'signed_out' })).catch((error: unknown) => setRunError(error instanceof Error ? error.message : 'Could not sign out')) }}>Sign out</button></>}<span className={`status-pill ${health ? 'online' : ''}`}><i />{health ? 'API connected' : connectionError ? 'API unavailable' : 'Connecting'}</span></div></header>
-      <section className="intro"><p className="eyebrow">STRATEGY TEST / 01</p><h1>From an idea to<br /><em>evidence.</em></h1><p>State a specific price-based trading hypothesis and choose a lookback. Jimmy will make dated portfolio decisions and replay them over history.</p></section>
+      <section className="intro"><p className="eyebrow">STRATEGY TEST / 01</p><h1>From an idea to<br /><em>evidence.</em></h1><p>State a specific price-based trading hypothesis, choose the sectors, and set the test dates. Jimmy will make dated portfolio decisions and replay them over history.</p></section>
 
       <section className="prompt-panel" aria-labelledby="prompt-title">
         <div className="prompt-heading"><div><p className="eyebrow">YOUR HYPOTHESIS</p><h2 id="prompt-title">What would you like to test?</h2></div><span className="prompt-scope">S&P 500 · monthly or quarterly</span></div>
@@ -143,7 +167,17 @@ export default function App() {
           <label className="sr-only" htmlFor="strategy-prompt">Trading strategy prompt</label>
           <textarea id="strategy-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} maxLength={4000} rows={5} placeholder="Describe your trading strategy…" />
           <div className="lookback-control"><label htmlFor="lookback-months">Look back <input id="lookback-months" type="number" min="1" max="12" step="1" required value={lookbackInput} onChange={(event) => setLookbackInput(event.target.value)} /> months</label><p>Use the previous {validLookback ? lookbackMonths : 'selected'} months of prices to apply your rule at each rebalance.</p></div>
-          <div className="prompt-actions"><span>{auth?.mode === 'signed_out' ? 'Sign in to run a strategy.' : available === null ? 'Checking strategy testing availability…' : available ? 'Uses current S&P 500 membership and historical adjusted prices.' : 'Strategy testing is unavailable.'}</span><button type="submit" disabled={!available || auth?.mode !== 'signed_in' || running || !prompt.trim() || !validLookback}>{running ? 'Testing…' : 'Run strategy'}<span aria-hidden="true">→</span></button></div>
+          <div className="filter-grid">
+            <fieldset className="sector-control"><legend>Include sectors</legend>
+              <label className="sector-option"><input type="checkbox" checked={selectedSectors.length === 0} onChange={() => setSelectedSectors([])} />All sectors</label>
+              {capabilities?.sectors.map((sector) => <label className="sector-option" key={sector}><input type="checkbox" checked={selectedSectors.includes(sector)} onChange={() => setSelectedSectors((current) => current.includes(sector) ? current.filter((value) => value !== sector) : [...current, sector])} />{sector}</label>)}
+            </fieldset>
+            <fieldset className="date-control"><legend>Backtest dates</legend><div>
+              <label htmlFor="start-date">Start<input id="start-date" type="date" required min={capabilities?.earliest_start_date} max={endDate} value={startDate} onChange={(event) => setStartDate(event.target.value)} /></label>
+              <label htmlFor="end-date">End<input id="end-date" type="date" required min={startDate} max={capabilities?.latest_end_date} value={endDate} onChange={(event) => setEndDate(event.target.value)} /></label>
+            </div><p>Performance spans these dates. Lookback prices are fetched from before the start date.</p>{!validDates && <p className="field-error">Choose a range of at least 90 days.</p>}</fieldset>
+          </div>
+          <div className="prompt-actions"><span>{auth?.mode === 'signed_out' ? 'Sign in to run a strategy.' : capabilities === null ? 'Checking strategy testing availability…' : capabilities.enabled ? 'Uses the latest stored S&P 500 and GICS snapshots with historical adjusted prices.' : 'Strategy testing is unavailable.'}</span><button type="submit" disabled={!capabilities?.enabled || auth?.mode !== 'signed_in' || running || !prompt.trim() || !validLookback || !validDates}>{running ? 'Testing…' : 'Run strategy'}<span aria-hidden="true">→</span></button></div>
         </form>
         {runError && <p className="error-message" role="alert">{runError}</p>}
         {connectionError && <p className="connection-hint">{connectionError}</p>}

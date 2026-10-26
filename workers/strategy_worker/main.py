@@ -79,20 +79,23 @@ def process_message(message: dict, *, session, jobs, sqs, queue_url: str,
     try:
         item = jobs.get_item(Key={"job_id": job_id}, ConsistentRead=True)["Item"]
         end = datetime.fromisoformat(item["end_at"])
+        start = datetime.fromisoformat(item["start_at"]) if item.get("start_at") else end - timedelta(days=365)
+        sectors = list(item.get("sectors", []))
         dynamodb = session.client("dynamodb")
         report = run_strategy(
             prompt=item["prompt"], lookback_months=int(item["lookback_months"]),
             agent=BedrockStrategyAgent(session=session, model_id=model_id),
             universe_loader=lambda universe: list_universe_symbols(
                 dynamodb, "jimmy-dev-stock-universe-membership", universe,
+                sectors=sectors, gics_table_name="jimmy-dev-stock-gics-history",
             ),
             price_loader=get_adjusted_close_prices,
             market_cap_loader=get_daily_prices_and_market_caps,
-            start=end - timedelta(days=365), end=end,
+            start=start, end=end, selected_sectors=sectors,
         )
         session.client("s3").put_object(
             Bucket=results_bucket, Key=f"jobs/{job_id}.json",
-            Body=json.dumps({"schema_version": 3, **report}, allow_nan=False).encode(),
+            Body=json.dumps({"schema_version": 4, **report}, allow_nan=False).encode(),
             ContentType="application/json",
         )
         jobs.update_item(

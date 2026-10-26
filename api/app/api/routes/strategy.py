@@ -6,7 +6,7 @@ import logging
 import json
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi import Response
@@ -17,12 +17,42 @@ from app.api.routes.auth import current_session, require_same_origin
 
 router = APIRouter(prefix="/strategy", tags=["strategy"])
 logger = logging.getLogger(__name__)
-STRATEGY_SCHEMA_VERSION = 3
+STRATEGY_SCHEMA_VERSION = 4
+GICS_SECTORS = (
+    "Communication Services", "Consumer Discretionary", "Consumer Staples",
+    "Energy", "Financials", "Health Care", "Industrials",
+    "Information Technology", "Materials", "Real Estate", "Utilities",
+)
+EARLIEST_BACKTEST_DATE = date(1996, 1, 1)
 
 
 class StrategyRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000)
     lookback_months: int = Field(ge=1, le=12, strict=True)
+    sectors: list[str] = Field(default_factory=list, max_length=len(GICS_SECTORS))
+    start_date: date | None = None
+    end_date: date | None = None
+
+
+def _job_dates(body: StrategyRequest) -> tuple[date, date]:
+    today = datetime.now(timezone.utc).date()
+    if (body.start_date is None) != (body.end_date is None):
+        raise HTTPException(status_code=422, detail="Choose both a start date and an end date")
+    if body.start_date is None:
+        end_date = today
+        start_date = end_date - timedelta(days=365)
+    else:
+        start_date, end_date = body.start_date, body.end_date
+    if start_date < EARLIEST_BACKTEST_DATE:
+        raise HTTPException(status_code=422, detail="Start date must be on or after 1996-01-01")
+    if end_date > today:
+        raise HTTPException(status_code=422, detail="End date cannot be in the future")
+    if end_date - start_date < timedelta(days=90):
+        raise HTTPException(
+            status_code=422,
+            detail="The backtest must span at least 90 days",
+        )
+    return start_date, end_date
 
 
 def _require_job_configuration(settings: Settings) -> None:
@@ -40,6 +70,9 @@ def capabilities(request: Request) -> dict:
                         settings.cognito_domain, settings.cognito_client_id,
                         settings.public_url, settings.sessions_table)),
         "schema_version": STRATEGY_SCHEMA_VERSION,
+        "sectors": list(GICS_SECTORS),
+        "earliest_start_date": EARLIEST_BACKTEST_DATE.isoformat(),
+        "latest_end_date": datetime.now(timezone.utc).date().isoformat(),
     }
 
 
@@ -51,6 +84,12 @@ def run(request: Request, body: StrategyRequest, response: Response) -> dict:
 
     require_same_origin(request)
     user = current_session(request)
+    unknown_sectors = sorted(set(body.sectors) - set(GICS_SECTORS))
+    if unknown_sectors:
+        raise HTTPException(status_code=422, detail=f"Unknown GICS sector: {unknown_sectors[0]}")
+    if len(set(body.sectors)) != len(body.sectors):
+        raise HTTPException(status_code=422, detail="Each GICS sector may be selected once")
+    start_date, end_date = _job_dates(body)
     session = boto3.Session(region_name=settings.aws_region)
     jobs = session.resource("dynamodb").Table(settings.jobs_table)
     queue = session.client("sqs")
@@ -60,7 +99,9 @@ def run(request: Request, body: StrategyRequest, response: Response) -> dict:
         "user_sub": user["user_sub"],
         "prompt": body.prompt.strip(),
         "lookback_months": body.lookback_months,
-        "end_at": datetime.now(timezone.utc).isoformat(),
+        "sectors": sorted(body.sectors),
+        "start_at": datetime.combine(start_date, datetime.min.time(), timezone.utc).isoformat(),
+        "end_at": datetime.combine(end_date + timedelta(days=1), datetime.min.time(), timezone.utc).isoformat(),
         "status": "queued",
         "created_at": int(time.time()),
         "expires_at": int(time.time()) + 30 * 24 * 60 * 60,

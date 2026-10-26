@@ -87,6 +87,7 @@ def run_strategy(
     market_cap_loader: Callable[[list[str], datetime, datetime], pd.DataFrame] | None = None,
     include_replay_prices: bool = False,
     random_seed: int | None = None,
+    selected_sectors: list[str] | tuple[str, ...] = (),
 ) -> dict:
     """Run a price-based test while keeping each agent decision behind its cutoff."""
     if start.tzinfo is None or end.tzinfo is None or end <= start or end - start < timedelta(days=90):
@@ -149,9 +150,8 @@ def run_strategy(
                    sort_keys=True).encode()
     ).digest()[:8], "big")
     rng = random.Random(seed)
-    fetch_start = (
-        pd.Timestamp(start) - pd.DateOffset(months=plan.lookback_months) - pd.Timedelta(days=45)
-    ).to_pydatetime()
+    lookback_data_start = pd.Timestamp(start) - pd.DateOffset(months=plan.lookback_months)
+    fetch_start = (lookback_data_start - pd.Timedelta(days=7)).to_pydatetime()
     raw = tools.call(
         "read_prices", context,
         {"symbols": symbols + ["SPY"], "start": fetch_start.isoformat(), "end": end.isoformat()},
@@ -328,13 +328,15 @@ def run_strategy(
         "model_id": getattr(agent, "model_id", "unknown"),
         "random_seed": seed if any(step["operation"] == "sample" for step in plan.selection_steps) else None,
         "universe_symbol_count": len(symbols), "eligible_symbol_count": len(eligible),
+        "selected_sectors": sorted(set(selected_sectors)),
         "excluded_symbols": excluded,
+        "lookback_data_start": lookback_data_start.date().isoformat(),
         "start": start.date().isoformat(), "end_exclusive": end.date().isoformat(),
         "decisions": decisions, "selections": decisions,
         "price_data_sha256": digest,
         "market_cap_data_sha256": market_cap_digest,
         "limitations": [
-            "Current SP500 membership is not historical point-in-time membership; this test has survivorship bias.",
+            "Universe membership and sector filters use the latest stored snapshots; historical tests retain survivorship and classification bias.",
             "Yahoo adjusted closes approximate dividend-inclusive returns; execution uses the next trading-day close, not a real traded adjusted price.",
             "Stocks missing complete prices over the fetched period were excluded.",
             "The model assessed only signals available at each prior close; its decisions may differ on a new run.",

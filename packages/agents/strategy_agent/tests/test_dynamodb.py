@@ -13,9 +13,13 @@ def raw(item):
     return {key: serialize(value) for key, value in item.items()}
 
 
-def client(rows, metadata=()):
+def client(rows, metadata=(), gics=()):
     db = Mock()
-    db.get_paginator.return_value.paginate.return_value = [{"Items": [raw(row) for row in rows]}]
+    query = Mock()
+    query.paginate.return_value = [{"Items": [raw(row) for row in rows]}]
+    scan = Mock()
+    scan.paginate.return_value = [{"Items": [raw(row) for row in gics]}]
+    db.get_paginator.side_effect = lambda operation: {"query": query, "scan": scan}[operation]
     db.batch_get_item.return_value = {"Responses": {"metadata": [raw(item) for item in metadata]}}
     return db
 
@@ -35,6 +39,27 @@ def test_default_uses_latest_observed_memberships_and_stable_metadata():
     ]
 
 
+def test_sector_filter_uses_latest_active_gics_snapshot():
+    rows = [membership("tech"), membership("energy"), membership("missing")]
+    metadata = [
+        {"security_id": "tech", "symbol": "TECH"},
+        {"security_id": "energy", "symbol": "OIL"},
+        {"security_id": "missing", "symbol": "NONE"},
+    ]
+    gics = [
+        {"security_id": "tech", "sector": "Industrials", "observed_at": "2024-01-01T00:00:00Z",
+         "effective_to": "2024-06-01"},
+        {"security_id": "tech", "sector": "Information Technology",
+         "effective_from": "2024-06-01", "observed_at": "2024-05-01T00:00:00Z"},
+        {"security_id": "energy", "sector": "Energy", "observed_at": "2024-01-01T00:00:00Z"},
+    ]
+    db = client(rows, metadata, gics)
+    assert list_universe_symbols(
+        db, "membership", "SP500", metadata_table_name="metadata",
+        gics_table_name="gics", sectors=["Information Technology"],
+    ) == ["TECH"]
+
+
 def test_historical_date_resolves_verified_ticker_and_exclusive_removal():
     identity = {"security_id": "s1", "symbol": "META", "ticker_aliases": [
         {"symbol": "FB", "effective_from": "2012-05-18", "effective_to": "2022-06-09"},
@@ -43,7 +68,7 @@ def test_historical_date_resolves_verified_ticker_and_exclusive_removal():
     db = client([membership("s1"), membership("removed", removed_at="2022-06-09")], [identity])
     assert list_universe_symbols(db, "membership", "SP500", metadata_table_name="metadata",
                                  as_of="2022-06-09") == ["META"]
-    db.get_paginator.return_value.paginate.return_value = [{"Items": [raw(membership("s1"))]}]
+    db.get_paginator("query").paginate.return_value = [{"Items": [raw(membership("s1"))]}]
     assert list_universe_symbols(db, "membership", "SP500", metadata_table_name="metadata",
                                  as_of="2022-06-08") == ["FB"]
 

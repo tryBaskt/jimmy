@@ -1,5 +1,11 @@
 export type Health = { status: 'ok'; service: string }
 export type AuthState = { mode: 'signed_out' | 'signed_in'; email?: string }
+export type StrategyCapabilities = {
+  enabled: boolean
+  sectors: string[]
+  earliest_start_date: string
+  latest_end_date: string
+}
 
 export async function getAuthState(signal: AbortSignal): Promise<AuthState> {
   const response = await fetch('/api/auth/session', { signal })
@@ -23,7 +29,7 @@ export type PeriodMetrics = {
 }
 
 export type StrategyResult = {
-  schema_version: 3
+  schema_version: 4
   plan: {
     hypothesis: string
     universe: string
@@ -42,6 +48,8 @@ export type StrategyResult = {
   universe_symbol_count: number
   eligible_symbol_count: number
   excluded_symbols: string[]
+  selected_sectors: string[]
+  lookback_data_start: string
   start: string
   end_exclusive: string
   strategy: PeriodMetrics
@@ -54,7 +62,7 @@ export type StrategyResult = {
   limitations: string[]
 }
 
-const STRATEGY_SCHEMA_VERSION = 3
+const STRATEGY_SCHEMA_VERSION = 4
 const incompatibleApi = 'The deployed API uses an incompatible strategy version.'
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -70,22 +78,36 @@ const wait = (milliseconds: number, signal: AbortSignal): Promise<void> => new P
   signal.addEventListener('abort', onAbort, { once: true })
 })
 
-export async function getStrategyCapabilities(signal: AbortSignal): Promise<boolean> {
+export async function getStrategyCapabilities(signal: AbortSignal): Promise<StrategyCapabilities> {
   const response = await fetch('/api/strategy/capabilities', {
     signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
   })
   if (!response.ok) throw new Error(`API returned HTTP ${response.status}`)
   const body: unknown = await response.json()
   if (!isRecord(body) || body.schema_version !== STRATEGY_SCHEMA_VERSION) throw new Error(incompatibleApi)
-  if (typeof body.enabled !== 'boolean') throw new Error('Unexpected API response')
-  return body.enabled
+  if (typeof body.enabled !== 'boolean' || !Array.isArray(body.sectors) ||
+    !body.sectors.every((sector) => typeof sector === 'string') ||
+    typeof body.earliest_start_date !== 'string' || typeof body.latest_end_date !== 'string') {
+    throw new Error('Unexpected API response')
+  }
+  return {
+    enabled: body.enabled, sectors: body.sectors,
+    earliest_start_date: body.earliest_start_date,
+    latest_end_date: body.latest_end_date,
+  }
 }
 
-export async function runStrategy(prompt: string, lookbackMonths: number, signal: AbortSignal): Promise<StrategyResult> {
+export async function runStrategy(
+  prompt: string, lookbackMonths: number, sectors: string[], startDate: string,
+  endDate: string, signal: AbortSignal,
+): Promise<StrategyResult> {
   const response = await fetch('/api/strategy/run', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt, lookback_months: lookbackMonths }),
+    body: JSON.stringify({
+      prompt, lookback_months: lookbackMonths, sectors,
+      start_date: startDate, end_date: endDate,
+    }),
     signal: AbortSignal.any([signal, AbortSignal.timeout(600000)]),
   })
   const body: unknown = await response.json().catch(() => null)
@@ -124,6 +146,7 @@ function validateStrategyResult(body: unknown): StrategyResult {
     !isMetrics(body.strategy) || !isMetrics(body.spy) ||
     !Array.isArray(body.selections) || !Array.isArray(body.performance_curve) ||
     !Array.isArray(body.limitations) || !Array.isArray(body.excluded_symbols) ||
+    !Array.isArray(body.selected_sectors) || typeof body.lookback_data_start !== 'string' ||
     typeof body.start !== 'string' || typeof body.end_exclusive !== 'string' ||
     typeof body.eligible_symbol_count !== 'number' ||
     typeof body.universe_symbol_count !== 'number') throw new Error('The API returned an incomplete strategy report; no result was shown.')

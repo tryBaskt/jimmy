@@ -47,10 +47,44 @@ def _metadata(dynamodb_client, table_name: str, security_ids: set[str]) -> dict:
     return result
 
 
+def _current_gics_sectors(dynamodb_client, table_name: str, security_ids: set[str]) -> dict[str, str]:
+    deserialize = TypeDeserializer().deserialize
+    pages = dynamodb_client.get_paginator("scan").paginate(
+        TableName=table_name,
+        ProjectionExpression="#id, #sector, #from, #to, #observed",
+        ExpressionAttributeNames={
+            "#id": "security_id", "#sector": "sector", "#from": "effective_from",
+            "#to": "effective_to", "#observed": "observed_at",
+        },
+        ConsistentRead=True,
+    )
+    today = date.today().isoformat()
+    candidates: dict[str, list[dict]] = {}
+    for page in pages:
+        for raw in page.get("Items", []):
+            item = {key: deserialize(value) for key, value in raw.items()}
+            identity = item.get("security_id")
+            if identity not in security_ids or not item.get("sector"):
+                continue
+            if item.get("effective_from") and item["effective_from"] > today:
+                continue
+            if item.get("effective_to") and item["effective_to"] <= today:
+                continue
+            candidates.setdefault(identity, []).append(item)
+    return {
+        identity: max(rows, key=lambda row: max(
+            row.get("effective_from") or "", row.get("observed_at") or "",
+        ))["sector"]
+        for identity, rows in candidates.items()
+    }
+
+
 def list_universe_symbols(
     dynamodb_client, table_name: str, universe: str, *,
     metadata_table_name: str = "jimmy-dev-stock-metadata",
     as_of: str | date | datetime | None = None,
+    sectors: list[str] | tuple[str, ...] | None = None,
+    gics_table_name: str = "jimmy-dev-stock-gics-history",
 ) -> list[str]:
     """Resolve the latest observed membership, or a dated observation.
 
@@ -78,6 +112,8 @@ def list_universe_symbols(
     if not historical:
         if as_of is not None:
             raise UniverseHistoryUnavailable("Legacy memberships have no historical coverage")
+        if sectors:
+            raise UniverseHistoryUnavailable("Legacy memberships cannot be filtered by GICS sector")
         return sorted({row["symbol"].upper() for row in rows})
     if len(historical) != len(rows):
         raise UniverseHistoryUnavailable("Mixed legacy and historical membership schemas")
@@ -96,8 +132,15 @@ def list_universe_symbols(
                 and (not row.get("removed_at") or target < row["removed_at"])]
     identities = _metadata(dynamodb_client, metadata_table_name,
                            {row["security_id"] for row in selected})
+    selected_sectors = set(sectors or ())
+    classifications = (
+        _current_gics_sectors(dynamodb_client, gics_table_name, set(identities))
+        if selected_sectors else {}
+    )
     symbols = set()
     for row in selected:
+        if selected_sectors and classifications.get(row["security_id"]) not in selected_sectors:
+            continue
         item = identities[row["security_id"]]
         if as_of is None:
             symbol = item.get("symbol")

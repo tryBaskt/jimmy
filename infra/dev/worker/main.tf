@@ -79,6 +79,7 @@ resource "aws_iam_policy" "task" {
       { Effect = "Allow", Action = ["dynamodb:GetItem", "dynamodb:UpdateItem"], Resource = "arn:aws:dynamodb:us-east-1:499133675835:table/jimmy-dev-strategy-jobs" },
       { Effect = "Allow", Action = "dynamodb:Query", Resource = "arn:aws:dynamodb:us-east-1:499133675835:table/jimmy-dev-stock-universe-membership" },
       { Effect = "Allow", Action = "dynamodb:BatchGetItem", Resource = "arn:aws:dynamodb:us-east-1:499133675835:table/jimmy-dev-stock-metadata" },
+      { Effect = "Allow", Action = "dynamodb:Scan", Resource = "arn:aws:dynamodb:us-east-1:499133675835:table/jimmy-dev-stock-gics-history" },
       { Effect = "Allow", Action = "s3:PutObject", Resource = "arn:aws:s3:::jimmy-dev-strategy-results-499133675835/jobs/*" },
       {
         Effect   = "Allow"
