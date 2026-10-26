@@ -8,3 +8,5 @@ venv/
 node_modules/
 strategy_research_result.json
 notebook.ipynb
+batch_scripts/historical_stock_ingestion/artifacts/
+infra/dev/*.tfplan

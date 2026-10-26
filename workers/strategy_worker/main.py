@@ -131,6 +131,8 @@ def process_message(message: dict, *, session, jobs, sqs, queue_url: str,
     try:
         item = jobs.get_item(Key={"job_id": job_id}, ConsistentRead=True)["Item"]
         end = datetime.fromisoformat(item["end_at"])
+        start = datetime.fromisoformat(item["start_at"]) if item.get("start_at") else end - timedelta(days=365)
+        sectors = list(item.get("sectors", []))
         dynamodb = session.client("dynamodb")
         feature_sources = price_history_registry()
         report = run_strategy(
@@ -139,17 +141,18 @@ def process_message(message: dict, *, session, jobs, sqs, queue_url: str,
                                        feature_sources=feature_sources),
             universe_loader=lambda universe: list_universe_symbols(
                 dynamodb, "jimmy-dev-stock-universe-membership", universe,
+                sectors=sectors, gics_table_name="jimmy-dev-stock-gics-history",
             ),
             price_loader=get_adjusted_close_prices,
             market_cap_loader=get_daily_prices_and_market_caps,
-            start=end - timedelta(days=365), end=end, job_id=job_id,
+            start=start, end=end, selected_sectors=sectors, job_id=job_id,
             evidence={"user_sub": item.get("user_sub"), "artifacts": item.get("artifacts", [])},
             feature_sources=feature_sources,
         )
         logger.info("Strategy job %s report ready; uploading result", job_id)
         session.client("s3").put_object(
             Bucket=results_bucket, Key=f"jobs/{job_id}.json",
-            Body=json.dumps({"schema_version": 3, **report}, allow_nan=False).encode(),
+            Body=json.dumps({"schema_version": 4, **report}, allow_nan=False).encode(),
             ContentType="application/json",
         )
         logger.info("Strategy job %s result uploaded; recording completion", job_id)

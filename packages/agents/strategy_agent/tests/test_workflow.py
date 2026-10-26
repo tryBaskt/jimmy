@@ -49,6 +49,7 @@ def test_rebalance_uses_prior_close_and_saved_decisions_replay(caplog):
     assert "Buy the strongest prior performer" not in caplog.text
     assert report["decisions"][0]["signal_date"] < report["decisions"][0]["rebalance_date"]
     assert report["decisions"][0]["lookback_start"] < report["decisions"][0]["signal_date"]
+    assert report["lookback_data_start"] == "2025-02-01"
     assert len(report["decisions"]) == 4
     assert report["run_record"]["run_id"]
     assert [event["kind"] for event in report["run_record"]["events"]].count("portfolio_decision") == 4
