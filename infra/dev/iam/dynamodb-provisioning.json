@@ -20,6 +20,7 @@
       "Resource": [
         "arn:aws:dynamodb:us-east-1:499133675835:table/jimmy-dev-stock-metadata",
         "arn:aws:dynamodb:us-east-1:499133675835:table/jimmy-dev-stock-universe-membership",
+        "arn:aws:dynamodb:us-east-1:499133675835:table/jimmy-dev-stock-gics-history",
         "arn:aws:dynamodb:us-east-1:499133675835:table/jimmy-dev-user-sessions",
         "arn:aws:dynamodb:us-east-1:499133675835:table/jimmy-dev-strategy-jobs"
       ]

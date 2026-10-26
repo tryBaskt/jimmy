@@ -3,36 +3,46 @@
 This Terraform root manages dev resources in AWS account `499133675835`, region
 `us-east-1`. Resource names follow `jimmy-<env>-<purpose>`.
 
-## Stock metadata table
+## Historical stock tables
 
-- Name: `jimmy-dev-stock-metadata`
-- Partition key: `symbol` (String), containing the FMP symbol
-- Capacity: on-demand (`PAY_PER_REQUEST`)
-- No sort key, secondary indexes, TTL, or initial items
-- Encryption at rest uses DynamoDB's default AWS-owned key
+The three on-demand tables have String keys and no secondary indexes or TTL:
 
-Only key attributes are declared in Terraform. The ingestion job will write
-`companyName`, `exchange`, `country`, `state`, `city`, `sector`, `industry`,
-`currency`, `marketCap`, `isActivelyTrading`, `universes`, and `updatedAt` as
-ordinary item attributes. These represent current metadata, not historical
-index membership. Missing FMP values can be omitted.
+| Table | Partition key | Sort key |
+|---|---|---|
+| `jimmy-dev-stock-metadata` | `security_id` | none |
+| `jimmy-dev-stock-universe-membership` | `universe` | `membership_key` (`security_id#observed_from`) |
+| `jimmy-dev-stock-gics-history` | `security_id` | `classification_key` |
 
-## Stock universe membership table
+Metadata uses a stable security ID, a source display `symbol`, company details,
+`source_symbol_observations`, and verified `ticker_aliases`. A verified alias has
+`symbol`, `effective_from`, optional exclusive `effective_to`, and evidence.
+Source symbols with only observed bounds are not verified historical exchange
+tickers. Share classes remain separate securities; unresolved matches are not merged.
 
-- Name: `jimmy-dev-stock-universe-membership`
-- Partition key: `universe` (String), such as `SP500` or `NASDAQ100`
-- Sort key: `symbol` (String), containing the FMP symbol
-- Capacity: on-demand (`PAY_PER_REQUEST`)
-- No secondary indexes, TTL, or initial items
+Membership rows contain `security_id`, `source_symbol`, `added_at`, optional
+exclusive `removed_at`, observed interval bounds, and dataset coverage bounds
+`dataset_observed_from`/`dataset_observed_through`. CSV dates are snapshot
+observations, not official membership effective dates. Left/right censoring flags
+distinguish dataset boundaries from real changes.
 
-Each item contains only a universe and symbol pair. The composite key makes each
-pair unique while allowing a symbol to belong to multiple universes. Query by
-`universe` to retrieve its stock symbols. Reverse lookup by symbol is not indexed.
-These are current memberships; they do not include historical effective dates.
-Keep ETF-derived Russell memberships identified as proxies in ingestion and UI.
+GICS rows store only classifications permitted under the Bigdata agreement.
+`classification_key` distinguishes verified effective dates from observation-only
+records. Observed classifications must not be backdated to membership dates.
+Missing historical classifications remain unknown.
 
-Both table names and ARNs are exposed as Terraform outputs. Ingestion and prod
-infrastructure are outside this deployment.
+The universe reader defaults to the last dataset snapshot and resolves display
+symbols through metadata with BatchGetItem. Explicit historical requests reject
+dates outside dataset coverage and require verified effective ticker aliases.
+The strategy workflow still selects one universe for an entire run; this migration
+does not add per-rebalance historical membership selection. Backtests must not be
+presented as free of survivorship bias until that workflow is implemented.
+
+Changing the first two tables' keys requires replacement. Export their existing
+contents before replacement. Names and ARNs are exposed as Terraform outputs.
+The old `universe_stock_metadata_ingestion` utility targets the retired symbol-only
+schema and fails its schema check against these tables; use historical ingestion.
+Only key attributes are declared in Terraform. Encryption at rest uses DynamoDB's
+default AWS-owned key.
 
 ## Deployment
 
@@ -47,7 +57,7 @@ from `dev`. After CI passes, its job **provisioning infra**:
    access on the bucket.
 4. Initializes the S3 backend, validates Terraform, saves a plan, and applies that
    exact plan.
-5. Verifies both tables exist and records their names and ARNs in the job logs.
+5. Verifies all three stock tables exist and records their names and ARNs in the job logs.
 
 State bucket: `jimmy-dev-terraform-state-499133675835`.
 State key: `dev/terraform.tfstate`; locking uses `dev/terraform.tfstate.tflock`.

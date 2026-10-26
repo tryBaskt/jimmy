@@ -113,7 +113,8 @@ jobs:
         run: |
           table="$(terraform output -raw stock_metadata_table_name)"
           membership="$(terraform output -raw stock_universe_membership_table_name)"
-          for table_name in "${table}" "${membership}"; do
+          gics="$(terraform output -raw stock_gics_history_table_name)"
+          for table_name in "${table}" "${membership}" "${gics}"; do
             aws dynamodb wait table-exists --table-name "${table_name}"
             aws dynamodb describe-table --table-name "${table_name}" \
               --query 'Table.{Name:TableName,Status:TableStatus,Arn:TableArn}'
@@ -124,6 +125,7 @@ jobs:
             echo "Region: ${AWS_REGION}"
             echo "DynamoDB table: ${table}"
             echo "Universe membership table: ${membership}"
+            echo "GICS history table: ${gics}"
             echo 'Role: jimmy-dev-github-actions'
             echo "Terraform state: s3://${STATE_BUCKET}/dev/terraform.tfstate"
           } >> "${GITHUB_STEP_SUMMARY}"
