@@ -18,6 +18,7 @@ def test_structured_call_offers_one_tool_and_sets_explicit_token_budget():
         ]}},
     }
     client = BedrockStructuredClient(session=session, model_id="test-model")
+    assert session.client.call_args.kwargs["config"].retries["total_max_attempts"] == 1
 
     assert client.request(
         instructions="Return a result", prompt="Calculate it",

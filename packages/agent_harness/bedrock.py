@@ -14,7 +14,7 @@ class BedrockStructuredClient:
         self.model_id = model_id
         self._client = session.client(
             "bedrock-runtime",
-            config=Config(retries={"mode": "adaptive", "max_attempts": 5}),
+            config=Config(retries={"mode": "standard", "total_max_attempts": 1}),
         )
 
     def request(

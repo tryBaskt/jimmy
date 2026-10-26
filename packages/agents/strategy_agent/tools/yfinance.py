@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from bisect import bisect_right
 from datetime import datetime, timedelta, timezone
+import logging
 from math import isfinite
 from typing import Sequence
 
 import pandas as pd
 import yfinance as yf
+
+logger = logging.getLogger(__name__)
 
 
 class MarketDataError(Exception):
@@ -23,8 +26,12 @@ def get_adjusted_close_prices(
     if not requested:
         raise MarketDataError("At least one symbol is required")
     chunks = []
+    batch_count = (len(requested) + 19) // 20
     for offset in range(0, len(requested), 20):
         batch = requested[offset:offset + 20]
+        batch_number = offset // 20 + 1
+        logger.info("Adjusted-price batch %s/%s started symbols=%s",
+                    batch_number, batch_count, len(batch))
         try:
             raw = yf.download(
                 batch, start=start_datetime, end=end_datetime, interval="1d",
@@ -34,6 +41,8 @@ def get_adjusted_close_prices(
         except Exception as error:
             raise MarketDataError(f"Could not download prices for {batch}") from error
         if raw is None or raw.empty:
+            logger.warning("Adjusted-price batch %s/%s returned no rows",
+                           batch_number, batch_count)
             continue
         if isinstance(raw.columns, pd.MultiIndex):
             if "Close" in raw.columns.get_level_values(0):
@@ -49,12 +58,16 @@ def get_adjusted_close_prices(
         close = close.rename(columns=str.upper).reindex(columns=batch)
         close.index = pd.to_datetime(close.index, utc=True)
         chunks.append(close)
+        logger.info("Adjusted-price batch %s/%s complete rows=%s",
+                    batch_number, batch_count, len(close))
     if not chunks:
         raise MarketDataError("Yahoo returned no daily prices")
     result = pd.concat(chunks, axis=1).sort_index().reindex(columns=requested)
     result = result.apply(pd.to_numeric, errors="coerce")
     result = result.loc[(result.index >= start_datetime) & (result.index < end_datetime)]
     result.index.name = "timestamp"
+    logger.info("Adjusted-price download complete symbols=%s trading_days=%s",
+                len(requested), len(result))
     return result
 
 
@@ -87,6 +100,7 @@ def get_daily_prices_and_market_caps(
     if start >= end:
         raise MarketDataError("Start datetime must precede end datetime")
 
+    logger.info("Market-cap price download started symbols=%s", len(requested))
     try:
         prices = yf.download(
             requested,
@@ -104,9 +118,11 @@ def get_daily_prices_and_market_caps(
         raise MarketDataError("Could not download daily prices") from error
     if prices is None or prices.empty:
         raise MarketDataError("Yahoo returned no daily prices")
+    logger.info("Market-cap price download complete rows=%s; loading share histories",
+                len(prices))
 
     results = []
-    for symbol in requested:
+    for number, symbol in enumerate(requested, 1):
         if isinstance(prices.columns, pd.MultiIndex):
             if symbol in prices.columns.get_level_values(1):
                 stock = prices.xs(symbol, axis=1, level=1)
@@ -207,7 +223,11 @@ def get_daily_prices_and_market_caps(
         stock.index.name = "timestamp"
         stock["symbol"] = symbol
         results.append(stock.reset_index().set_index(["timestamp", "symbol"]))
+        logger.info("Market-cap share history %s/%s complete has_shares=%s",
+                    number, len(requested), bool(stock["shares_outstanding"].notna().any()))
 
     if not results:
         raise MarketDataError("Yahoo returned no prices for the requested symbols")
-    return pd.concat(results).sort_index()
+    result = pd.concat(results).sort_index()
+    logger.info("Market-cap download complete symbols=%s rows=%s", len(results), len(result))
+    return result

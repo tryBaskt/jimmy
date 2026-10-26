@@ -1,7 +1,10 @@
 import json
 from datetime import datetime, timezone
+import time
+import uuid
 
 import boto3
+import pytest
 from fastapi.testclient import TestClient
 
 from app.api.routes import strategy
@@ -102,3 +105,40 @@ def test_strategy_rejects_invalid_filters_before_aws(monkeypatch):
         })
         assert response.status_code == 422
         assert response.json()["detail"] == "The backtest must span at least 90 days"
+
+
+@pytest.mark.parametrize("status", ["retrying", "running"])
+def test_legacy_retry_or_expired_worker_lease_returns_failure(monkeypatch, status):
+    settings = Settings(
+        cognito_domain="https://example.auth.us-east-1.amazoncognito.com",
+        cognito_client_id="client", public_url="https://app.example.com",
+        sessions_table="sessions", jobs_table="jobs", jobs_queue_url="queue",
+        results_bucket="results",
+    )
+    job_id = str(uuid.uuid4())
+
+    class Table:
+        def get_item(self, **kwargs):
+            return {"Item": {
+                "job_id": job_id, "user_sub": "user-1", "status": status,
+                "expires_at": int(time.time()) + 60,
+                "lease_until": int(time.time()) - 1,
+            }}
+
+    class Session:
+        def __init__(self, **kwargs):
+            pass
+
+        def resource(self, name):
+            return self
+
+        def Table(self, name):
+            return Table()
+
+    monkeypatch.setattr(boto3, "Session", Session)
+    monkeypatch.setattr(strategy, "current_session", lambda _request: {"user_sub": "user-1"})
+    with TestClient(create_app(settings), base_url="https://app.example.com") as client:
+        response = client.get(f"/api/strategy/jobs/{job_id}")
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    assert "please" in response.json()["error"].lower()

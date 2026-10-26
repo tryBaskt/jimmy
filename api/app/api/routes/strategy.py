@@ -17,6 +17,7 @@ from app.api.routes.auth import current_session, require_same_origin
 
 router = APIRouter(prefix="/strategy", tags=["strategy"])
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 STRATEGY_SCHEMA_VERSION = 4
 GICS_SECTORS = (
     "Communication Services", "Consumer Discretionary", "Consumer Staples",
@@ -119,6 +120,7 @@ def run(request: Request, body: StrategyRequest, response: Response) -> dict:
             },
         )
         raise HTTPException(status_code=502, detail="Could not queue strategy run") from error
+    logger.info("Queued strategy job %s lookback_months=%s", job_id, body.lookback_months)
     response.status_code = 202
     return {"job_id": job_id, "status": "queued"}
 
@@ -145,4 +147,10 @@ def get_job(request: Request, job_id: uuid.UUID) -> dict:
     if status == "failed":
         return {"job_id": str(job_id), "status": status,
                 "error": item.get("error", "Strategy run failed")}
+    if status == "retrying":
+        return {"job_id": str(job_id), "status": "failed",
+                "error": "This earlier run failed. Please submit a new strategy test."}
+    if status == "running" and int(item.get("lease_until", 0)) < int(time.time()):
+        return {"job_id": str(job_id), "status": "failed",
+                "error": "The strategy worker stopped before finishing. This is a service issue; please try later."}
     return {"job_id": str(job_id), "status": status}

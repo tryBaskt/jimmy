@@ -8,38 +8,24 @@ import re
 from typing import Any
 
 from packages.agent_harness.bedrock import BedrockStructuredClient
+from .feature_sources import FeatureSourceRegistry, price_history_registry
+from .signal_expression import validate_signal
 
-"""Instructions shared by the strategy planner and dated decision maker."""
-
-PLAN_INSTRUCTIONS = """You are a strategy testing agent, not a strategy discovery agent.
-Translate the user's explicit hypothesis into a bounded test plan. Do not search
+PLAN_INSTRUCTIONS = """Determine whether the user has given a complete,
+testable trading hypothesis. If so, translate it faithfully into a strategy
+plan using the supplied lookback and the available tool schema. Describe each
+needed feature in features, including its data source and instructions, then
+refer to it by id in the selection rule. Do not search
 for the best-performing rule or invent an investment hypothesis. Reject vague
-requests to discover whichever signal worked best, and requests requiring
-earnings calls, news, fundamentals, options, or other unavailable data.
-Reject sector-neutral, beta-neutral, or other portfolio constraints that
-cannot be enforced by this version of the simulator.
-Translate complete selection rules into selection_steps: zero or more filters
-on an available numeric signal, then exactly one rank or sample operation.
-Sample draws top_n different stocks uniformly from the eligible universe;
-use it for random-selection hypotheses. Never replace sampling with ranking.
-Filters use comparison gt/gte/lt/lte and a numeric value. Rank uses feature
-and direction highest/lowest. Sample needs only operation=sample. Selection
-steps support long-only equal or market-cap weights. For selection_steps omit
-metric and rank_direction. The available signals are trailing price return, realized volatility,
-drawdown from a period high, distance from the period average price, and beta
-to SPY. The available universe is current SP500 membership. Rebalancing may
-be monthly or quarterly. The user's separate lookback-months control takes
-precedence over any lookback in the text. Default to 10 holdings, monthly,
-long-only, equal weight, 5 bps fees, and 5 bps slippage when unspecified.
-Never silently change an explicitly requested rule. "Market weights" means
-market_cap weighting, calculated from Yahoo historical market-cap estimates
-at each prior rebalance close. If the prompt cannot be tested with these
-inputs, set supported=false and explain why.
-Return exactly one submit_strategy_plan tool call.
+requests to discover whichever signal worked best. Preserve the
+user's selection, weighting, and rebalance rules; do not invent a hypothesis.
+If the hypothesis cannot be tested with the available data and operations,
+set supported=false and briefly explain what is missing. Return exactly one
+submit_strategy_plan tool call.
 """
 
 DECISION_INSTRUCTIONS = """Apply the fixed strategy plan to the supplied
-as-of-date price signals. Select only supplied symbols. Do not invent prices,
+as-of-date feature values. Select only supplied symbols. Do not invent evidence,
 change the hypothesis, use later data, or optimize against backtest outcomes.
 Return exactly one submit_portfolio_decision tool call with up to the plan's
 top_n positions. Each position needs a symbol, long/short direction, positive
@@ -52,13 +38,12 @@ plan explicitly permits it.
 """
 
 
-METRICS = {
-    "trailing_return": "price return",
-    "realized_volatility": "return volatility",
-    "drawdown_from_peak": "drawdown from period high",
-    "moving_average_gap": "distance from average price",
-    "market_beta": "beta to SPY",
-}
+class StrategyPlanError(ValueError):
+    """A model plan that cannot be executed as a strategy."""
+
+
+class UnsupportedStrategyError(StrategyPlanError):
+    """A user request outside the strategy tester's supported capabilities."""
 
 
 @dataclass(frozen=True)
@@ -75,9 +60,11 @@ class StrategyPlan:
     fees_bps: int
     slippage_bps: int
     selection_steps: tuple[dict, ...] = ()
+    features: tuple[dict, ...] = ()
 
     @classmethod
-    def from_model(cls, value: Any, lookback_months: int) -> "StrategyPlan":
+    def from_model(cls, value: Any, lookback_months: int,
+                   feature_sources: FeatureSourceRegistry | None = None) -> "StrategyPlan":
         if type(lookback_months) is not int or not 1 <= lookback_months <= 12:
             raise ValueError("Lookback must be an integer from 1 to 12 months")
         fields = {
@@ -90,7 +77,10 @@ class StrategyPlan:
         if type(value.get("supported")) is not bool or not isinstance(value.get("unsupported_reason", ""), str):
             raise ValueError("The model returned an invalid support assessment")
         if not value["supported"]:
-            raise ValueError(value.get("unsupported_reason", "")[:300] or "Please state a specific, testable hypothesis")
+            raise UnsupportedStrategyError(
+                value.get("unsupported_reason", "")[:300]
+                or "Please state a specific, testable hypothesis"
+            )
         has_steps = "selection_steps" in value
         optional = {"unsupported_reason"}
         if has_steps:
@@ -108,6 +98,28 @@ class StrategyPlan:
             raise ValueError("Only the SP500 universe is currently supported")
         if value["rebalance"] not in ("monthly", "quarterly"):
             raise ValueError("Rebalancing must be monthly or quarterly")
+        features = value.get("features", [])
+        sources = feature_sources or price_history_registry()
+        if not isinstance(features, list) or len(features) > 12:
+            raise ValueError("The strategy has an invalid feature plan")
+        known_features = {}
+        for feature in features:
+            if (not isinstance(feature, dict)
+                    or set(feature) != {"id", "source", "description", "instruction"}
+                    or any(not isinstance(feature[key], str) or not feature[key].strip()
+                           for key in ("id", "source", "description", "instruction"))
+                    or len(feature["id"]) > 64 or len(feature["source"]) > 80
+                    or len(feature["description"]) > 300 or len(feature["instruction"]) > 1000
+                    or feature["id"] in known_features):
+                raise ValueError("The strategy has an invalid feature definition")
+            sources.validate(feature)
+            known_features[feature["id"]] = feature
+
+        def validate_reference(reference: str) -> None:
+            if reference not in known_features:
+                # Accept existing price-only plans while newer plans use named features.
+                validate_signal(reference)
+
         steps = value.get("selection_steps", ())
         if has_steps:
             if not isinstance(steps, list) or not 1 <= len(steps) <= 6:
@@ -118,20 +130,27 @@ class StrategyPlan:
                 operation = step["operation"]
                 if operation == "filter":
                     if (index == len(steps) - 1 or set(step) != {"operation", "feature", "comparison", "value"}
-                            or step["feature"] not in METRICS or step["comparison"] not in ("gt", "gte", "lt", "lte")
+                            or not isinstance(step["feature"], str)
+                            or step["comparison"] not in ("gt", "gte", "lt", "lte")
                             or type(step["value"]) not in (int, float) or not isfinite(step["value"])):
                         raise ValueError("Invalid selection filter")
+                    validate_reference(step["feature"])
                 elif index != len(steps) - 1:
                     raise ValueError("Rank or sample must be the final selection step")
                 elif operation == "rank" and (set(step) != {"operation", "feature", "direction"}
-                        or step["feature"] not in METRICS or step["direction"] not in ("highest", "lowest")):
+                        or not isinstance(step["feature"], str)
+                        or step["direction"] not in ("highest", "lowest")):
                     raise ValueError("Invalid ranking step")
+                elif operation == "rank":
+                    validate_reference(step["feature"])
                 elif operation == "sample" and set(step) != {"operation"}:
                     raise ValueError("Invalid sampling step")
             if value["weighting"] == "model" or value["allow_short"]:
                 raise ValueError("Selection steps currently support long-only equal or market-cap weights")
-        elif not isinstance(value["metric"], str) or value["metric"] not in METRICS or value["rank_direction"] not in ("highest", "lowest"):
-            raise ValueError("The requested signal is not supported by the available price data")
+        elif not isinstance(value["metric"], str) or value["rank_direction"] not in ("highest", "lowest"):
+            raise ValueError("The requested signal needs a calculation and ranking direction")
+        else:
+            validate_reference(value["metric"])
         if value["weighting"] not in ("equal", "model", "market_cap"):
             raise ValueError("Weighting must be equal, model suggested, or market cap")
         if type(value["allow_short"]) is not bool:
@@ -145,20 +164,25 @@ class StrategyPlan:
             hypothesis.strip(), "SP500", value["top_n"], lookback_months,
             value["rebalance"], value.get("metric", ""), value.get("rank_direction", ""),
             value["weighting"], value["allow_short"], value["fees_bps"],
-            value["slippage_bps"], tuple(steps),
+            value["slippage_bps"], tuple(steps), tuple(features),
         )
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     def ranking_rule(self) -> str:
+        descriptions = {feature["id"]: feature["description"] for feature in self.features}
+
+        def describe(reference: str) -> str:
+            return descriptions.get(reference, reference)
+
         if self.selection_steps:
             return " → ".join(
-                f"{step['comparison']} {step['value']} {METRICS[step['feature']]}" if step["operation"] == "filter"
-                else f"{step['direction']} {METRICS[step['feature']]}" if step["operation"] == "rank"
+                f"{step['comparison']} {step['value']} of {describe(step['feature'])}" if step["operation"] == "filter"
+                else f"{step['direction']} {describe(step['feature'])}" if step["operation"] == "rank"
                 else "random sample" for step in self.selection_steps
             )
-        return f"{self.rank_direction} {METRICS[self.metric]} over {self.lookback_months} months"
+        return f"{self.rank_direction} {describe(self.metric)} over {self.lookback_months} months"
 
 
 def _tool(name: str, description: str, schema: dict) -> dict:
@@ -174,11 +198,19 @@ PLAN_TOOL = _tool("submit_strategy_plan", "Submit a bounded strategy test plan",
         "universe": {"type": "string", "enum": ["SP500"]},
         "top_n": {"type": "integer", "minimum": 1, "maximum": 20},
         "rebalance": {"type": "string", "enum": ["monthly", "quarterly"]},
-        "metric": {"type": "string", "enum": list(METRICS)},
+        "metric": {"type": "string", "description": "Feature id to use for a single-signal ranking."},
         "rank_direction": {"type": "string", "enum": ["highest", "lowest"]},
+        "features": {"type": "array", "maxItems": 12, "description": "Model-defined evidence and calculations needed by this hypothesis. Refer to connected source descriptions in the request.", "items": {
+            "type": "object", "properties": {
+                "id": {"type": "string"},
+                "source": {"type": "string", "description": "One of the connected feature sources listed in the request."},
+                "description": {"type": "string"},
+                "instruction": {"type": "string", "description": "Instructions in the format required by this feature's source adapter."},
+            }, "required": ["id", "source", "description", "instruction"], "additionalProperties": False,
+        }},
         "selection_steps": {"type": "array", "maxItems": 6, "items": {"type": "object", "properties": {
             "operation": {"type": "string", "enum": ["filter", "rank", "sample"]},
-            "feature": {"type": "string", "enum": list(METRICS)},
+            "feature": {"type": "string", "description": "Id of a model-defined feature."},
             "comparison": {"type": "string", "enum": ["gt", "gte", "lt", "lte"]},
             "value": {"type": "number"},
             "direction": {"type": "string", "enum": ["highest", "lowest"]},
@@ -188,7 +220,7 @@ PLAN_TOOL = _tool("submit_strategy_plan", "Submit a bounded strategy test plan",
         "fees_bps": {"type": "integer", "minimum": 0, "maximum": 100},
         "slippage_bps": {"type": "integer", "minimum": 0, "maximum": 100},
     },
-    "required": ["supported", "unsupported_reason", "hypothesis", "universe", "top_n", "rebalance", "weighting", "allow_short", "fees_bps", "slippage_bps"],
+    "required": ["supported", "unsupported_reason", "hypothesis", "universe", "top_n", "rebalance", "features", "weighting", "allow_short", "fees_bps", "slippage_bps"],
     "additionalProperties": False,
 })
 
@@ -208,8 +240,10 @@ DECISION_TOOL = _tool("submit_portfolio_decision", "Submit target positions for 
 
 
 class BedrockStrategyAgent:
-    def __init__(self, *, session: Any, model_id: str) -> None:
+    def __init__(self, *, session: Any, model_id: str,
+                 feature_sources: FeatureSourceRegistry | None = None) -> None:
         self.model_id = model_id
+        self._feature_sources = feature_sources or price_history_registry()
         self._model = BedrockStructuredClient(session=session, model_id=model_id)
 
     def _ask(self, instructions: str, prompt: str, tool: dict, max_tokens: int) -> dict:
@@ -224,8 +258,9 @@ class BedrockStrategyAgent:
             raise ValueError("Lookback must be an integer from 1 to 12 months")
         result = self._ask(
             PLAN_INSTRUCTIONS,
-            f"User hypothesis: {prompt}\nLookback control: {lookback_months} months.",
-            PLAN_TOOL, 800,
+            f"User hypothesis: {prompt}\nLookback control: {lookback_months} months.\n"
+            f"Connected feature sources: {self._feature_sources.capabilities()}",
+            PLAN_TOOL, 2400,
         )
         if isinstance(result, dict) and result.get("supported", True):
             market_weight_requested = bool(re.search(
@@ -246,8 +281,21 @@ class BedrockStrategyAgent:
                 **result,
             }
             if market_weight_requested and result["weighting"] != "market_cap":
-                raise ValueError("The model did not preserve the requested market-cap weighting")
-        return StrategyPlan.from_model(result, lookback_months)
+                raise StrategyPlanError("The model did not preserve the requested market-cap weighting")
+        if isinstance(result, dict) and isinstance(result.get("selection_steps"), list):
+            steps = [step.copy() if isinstance(step, dict) else step for step in result["selection_steps"]]
+            if steps and isinstance(steps[-1], dict) and steps[-1].get("operation") == "rank":
+                if "feature" not in steps[-1] and isinstance(result.get("metric"), str):
+                    steps[-1]["feature"] = result["metric"]
+                if "direction" not in steps[-1] and result.get("rank_direction") in ("highest", "lowest"):
+                    steps[-1]["direction"] = result["rank_direction"]
+            result = {**result, "selection_steps": steps}
+        try:
+            return StrategyPlan.from_model(result, lookback_months, self._feature_sources)
+        except StrategyPlanError:
+            raise
+        except ValueError as error:
+            raise StrategyPlanError(str(error)) from error
 
     def decide(self, plan: StrategyPlan, signal_date: str, signals: list[dict]) -> dict:
         import json
