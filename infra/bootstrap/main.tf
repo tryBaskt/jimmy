@@ -13,8 +13,9 @@ variable "region" {
   default = "us-east-1"
 }
 variable "repository" {
-  type    = string
-  default = "tryBaskt/jimmy"
+  type        = string
+  default     = "tryBaskt/jimmy"
+  description = "Repository portion of GitHub's OIDC subject. Use owner@owner_id/repo@repo_id when the repository emits ID-based subjects."
 }
 variable "github_oidc_provider_arn" {
   type        = string

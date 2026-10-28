@@ -93,6 +93,8 @@ terraform -chdir=infra/bootstrap apply
 
 If your account already has GitHub's OIDC provider, supply its ARN through `github_oidc_provider_arn`. Keep bootstrap state securely; move it to a separately managed remote backend after initialization. The bootstrap creates `jimmy-dev-*` and `jimmy-prod-*` deployment foundations. Runtime resources follow `jimmy-<env>-<purpose>`; globally unique buckets/domains additionally include the account ID. AWS-managed rules and service-linked roles retain their service-defined names.
 
+Use the appropriate operator `AWS_PROFILE` when running bootstrap. Account-specific settings can be kept in ignored `infra/bootstrap/local.auto.tfvars`. The `repository` input must match the repository portion of GitHub's actual OIDC subject, including `owner@owner_id/repo@repo_id` when ID-based subjects are emitted. Preserve this local configuration along with the ignored bootstrap state for subsequent applies. The new application's frontend uses `jimmy-<env>-workspace-frontend-<account>` to avoid the legacy frontend bucket name.
+
 The bootstrap role policies are deployment-operator policies, broader than runtime policies. They can provision networking, CloudFront and gateways and should be administered only by trusted operators; use separate accounts/permission boundaries for strict dev/prod control. They cannot modify the other environment's application IAM role path. Runtime roles have narrower table, bucket, model and execution permissions.
 
 ## Separate dev and production deployment

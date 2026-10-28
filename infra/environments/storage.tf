@@ -31,7 +31,8 @@ resource "aws_s3_bucket" "artifacts" {
   bucket = "${local.prefix}-artifacts-${local.account}"
 }
 resource "aws_s3_bucket" "web" {
-  bucket = "${local.prefix}-frontend-${local.account}"
+  # Keep this ground-up workspace separate from the legacy app's frontend bucket.
+  bucket = "${local.prefix}-workspace-frontend-${local.account}"
 }
 resource "aws_s3_bucket_public_access_block" "private" {
 

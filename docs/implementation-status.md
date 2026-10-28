@@ -20,7 +20,7 @@ This PR implements the ground-up application and deployable infrastructure. The 
 | Statistical multiplicity adjustments and arbitrary model training protocols | Not implemented; report does not claim those validations |
 | Live plans/processes/results and durable event replay | Implemented; socket notifications with cursor replay/polling fallback |
 | API Gateway service routing | Separate service routers and Lambda instances behind one HTTP gateway; shared metadata table initially |
-| New AWS resources and separate dev/prod Actions | Implemented; one-time bootstrap and GitHub environments required; no deployment performed by this PR |
+| New AWS resources and separate dev/prod Actions | Bootstrap applied and read back on 2026-10-28: deployment roles/secret-write policies, immutable image repositories and private versioned state buckets; follow-up plan shows no changes. Application deployment remains pending; new frontend bucket name avoids the legacy app's bucket |
 | Deployment secret provisioning | GitHub environment secrets for account/role, Bigdata API key and alert email; AWS Secrets Manager sync for key/email without plaintext Terraform state; SNS email configured separately after deployment |
 | Generic paper-quality score or proof of correctness | Deliberately absent |
 
