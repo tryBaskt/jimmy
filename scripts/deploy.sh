@@ -20,7 +20,6 @@ export TF_VAR_api_image="${registry}/jimmy-${DEPLOY_ENV}-api@${api_digest}"
 export TF_VAR_worker_image="${registry}/jimmy-${DEPLOY_ENV}-worker@${worker_digest}"
 export TF_VAR_bigdata_secret_arn="${BIGDATA_SECRET_ARN:-}"
 export TF_VAR_yfinance_shared_cache="${YFINANCE_SHARED_CACHE:-false}"
-export TF_VAR_alert_email="${ALERT_EMAIL:-}"
 terraform -chdir=infra/environments init -input=false -backend-config="bucket=jimmy-${DEPLOY_ENV}-state-${AWS_ACCOUNT_ID}" -backend-config="key=application.tfstate" -backend-config="region=${AWS_REGION}" -backend-config="use_lockfile=true"
 terraform -chdir=infra/environments plan -input=false -out=deploy.tfplan
 terraform -chdir=infra/environments apply -input=false deploy.tfplan

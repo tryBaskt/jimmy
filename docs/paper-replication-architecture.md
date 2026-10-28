@@ -81,6 +81,8 @@ One API Gateway routes stable service prefixes to separately deployed Lambda ser
 
 All new resources follow `jimmy-<env>-<purpose>` naming (account suffixes where global uniqueness is required). Dev and prod use separate GitHub Actions workflows, deployment roles, images, state and application resources. A push/merge to `dev` deploys the dev application and publishes the frontend through private S3 and CloudFront; the Actions summary reports its URL. Production deployment is dispatched from `main` through the separate `prod` GitHub environment. Bootstrap identity/state setup is a one-time prerequisite; feature-branch PR checks never deploy.
 
+GitHub environment secrets supply `AWS_ACCOUNT_ID`, `AWS_DEPLOY_ROLE_ARN`, `BIGDATA_SECRET_ARN` (the actual API key despite the retained GitHub name), and `ALERT_EMAIL`; `AWS_REGION` remains an environment variable. Deployment writes the key and email to the matching environment's named AWS Secrets Manager secrets without retrieving values or printing them. Only the resulting key ARN enters Terraform and ECS configuration. The alert email subscription is configured after deployment outside Terraform so the address is not persisted in plans/state. The bootstrap role permits only writes to these two named secrets; the worker execution role retrieves only the API key for ECS injection.
+
 Agents use AWS Bedrock with configurable role routing: GPT-6 Astra (`us.openai.gpt-6-astra`) for scientific planning, data-suitability decisions and extrapolation planning; Kimi K3 (`us.moonshotai.kimi-k3`) for worker tasks such as the narrative assessment. Price retrieval uses yfinance; other financial-content discovery starts with Bigdata.com. Its document search output is evidence, not automatically a numerical dataset. Both sit behind a connector registry so additional providers can be onboarded without rewriting the scientific workflow.
 
 ### Deployment responsibilities
@@ -341,7 +343,7 @@ Data-cache validation covers catalog hits without redundant internet retrieval, 
 
 ## Open implementation decisions
 
-1. Application structure, environment naming and service boundaries are defined above; account-specific bootstrap, GitHub environment variables and source/model access must be configured before deployment.
+1. Application structure, environment naming and service boundaries are defined above; account-specific bootstrap, GitHub environment secrets/variables and source/model access must be configured before deployment.
 2. First benchmark paper, main claim and required experiment suite, and legitimately accessible datasets.
 3. Numerical conventions, statistical estimators, and tolerances for the first template.
 4. PDF extraction/OCR tooling, assessed against the benchmark's equations and tables.

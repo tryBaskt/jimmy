@@ -42,7 +42,3 @@ variable "yfinance_shared_cache" {
   default     = false
   description = "Enable cross-user Yahoo caching only when provider terms permit this use."
 }
-variable "alert_email" {
-  type    = string
-  default = ""
-}

@@ -28,3 +28,6 @@ output "workflow_arn" {
 output "artifact_bucket" {
   value = aws_s3_bucket.artifacts.id
 }
+output "alerts_topic_arn" {
+  value = aws_sns_topic.alerts.arn
+}

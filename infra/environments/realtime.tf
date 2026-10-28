@@ -88,14 +88,8 @@ resource "aws_lambda_event_source_mapping" "activity" {
 resource "aws_sns_topic" "alerts" {
   name = "${local.prefix}-alerts"
 }
-resource "aws_sns_topic_subscription" "email" {
-
-  count     = var.alert_email == "" ? 0 : 1
-  topic_arn = aws_sns_topic.alerts.arn
-  protocol  = "email"
-  endpoint  = var.alert_email
-
-}
+# Deployment configures the email subscription outside Terraform so the private
+# address never enters plans or state. Only this non-sensitive topic is managed here.
 resource "aws_cloudwatch_metric_alarm" "workflow_failed" {
 
   alarm_name  = "${local.prefix}-workflow-failures"

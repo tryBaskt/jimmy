@@ -97,18 +97,22 @@ The bootstrap role policies are deployment-operator policies, broader than runti
 
 ## Separate dev and production deployment
 
-Create GitHub environments `dev` and `prod`. Set these environment variables in **each**:
+Create GitHub environments `dev` and `prod`. Set these **environment secrets** in each:
 
-| Variable | Value |
+| Secret | Value |
 | --- | --- |
 | `AWS_ACCOUNT_ID` | Deployment account |
-| `AWS_REGION` | Region supporting both Bedrock profiles; default `us-east-1` |
 | `AWS_DEPLOY_ROLE_ARN` | Matching bootstrap deployment-role output |
-| `BIGDATA_SECRET_ARN` | Optional ARN of a secret whose entire string value is the API key |
-| `YFINANCE_SHARED_CACHE` | `true` only for authorized shared reuse; otherwise `false` |
+| `BIGDATA_SECRET_ARN` | Optional **actual Bigdata API key**; this existing GitHub name is retained for compatibility |
 | `ALERT_EMAIL` | Optional email to subscribe to failure alerts; confirm the SNS subscription |
 
-Store the Bigdata API key through the AWS console or your secret-management process. Do not put secret values in GitHub variables, Terraform inputs/state, prompts or this repository. A customer-managed KMS key on that secret additionally requires appropriate execution-role decrypt access.
+Set `AWS_REGION` as an **environment variable** (default `us-east-1`; must support both Bedrock profiles). `YFINANCE_SHARED_CACHE` is also an optional environment variable: `true` only for authorized shared reuse; otherwise `false`.
+
+Deployment securely creates or updates `jimmy-<env>-bigdata-api-key` and `jimmy-<env>-alert-email` in AWS Secrets Manager from the GitHub secrets. The misleading GitHub name `BIGDATA_SECRET_ARN` contains the key; the workflow maps it to a step-local `BIGDATA_API_KEY`, then passes only the resulting **AWS ARN** to Terraform. ECS injects the API key into worker tasks at runtime. You do not need to create the AWS secrets manually. Bootstrap permissions allow writing only these two named secrets for the matching environment, without reading their values. **If you already applied bootstrap, apply it again before deploying this change** to grant those permissions.
+
+The alert recipient is configured through SNS after infrastructure deployment, outside Terraform, so the address is absent from Terraform plans/state. SNS must know the destination to deliver alerts; confirm its email subscription. The dedicated alerts topic has one deployment-managed email recipient; changing the GitHub email replaces confirmed old email subscriptions. Pending old requests cannot deliver until confirmed; remove obsolete pending requests in SNS when changing addresses. Omitting an optional GitHub secret preserves the existing AWS secret; omitting the email preserves existing subscriptions. Removing the Bigdata GitHub secret disables connector injection on the next deployment but does not delete the retained AWS secret.
+
+Private values are sent directly from step-scoped environment variables to the AWS SDK, not command arguments, files, Terraform inputs/state or job output. Never place them in GitHub variables, prompts or this repository. The sync uses the AWS-managed Secrets Manager encryption key; customer-managed keys require additional write/decrypt permissions. Changing a GitHub secret takes effect on the next environment deployment, which creates a new stored version; newly launched worker tasks receive it, while already-running tasks retain their injected value. Repeated syncs create versions; do not run this as a high-frequency rotation loop. Terraform destroy does not remove these deployment-managed secrets; retire them separately when decommissioning an environment. Deleting the SNS topic removes its subscriptions.
 
 - **Merge to `dev`:** `deploy-dev.yml` runs CI, builds/pushes both images, applies the dev infrastructure, builds/uploads the frontend, waits for cache invalidation and smoke-checks the API/configuration. Its Actions summary contains the **frontend URL**. Terraform also outputs it.
 - **Production:** manually dispatch `deploy-prod.yml` from `main`. Configure required reviewers and branch restrictions on the `prod` GitHub environment. Production uses separate state, image repositories, identity, data and compute.
@@ -120,7 +124,7 @@ Cognito sign-up is invitation-only. After the first deployment, an administrator
 aws cognito-idp admin-create-user --user-pool-id YOUR_NEW_POOL_ID --username YOUR_EMAIL --user-attributes Name=email,Value=YOUR_EMAIL Name=email_verified,Value=true
 ```
 
-The invitation lets you establish your password and access the deployed frontend through Cognito's hosted sign-in. Until bootstrap and environment variables are configured, merging alone cannot create AWS credentials for GitHub Actions.
+The invitation lets you establish your password and access the deployed frontend through Cognito's hosted sign-in. Until bootstrap and GitHub environment settings are configured, merging alone cannot create AWS credentials for GitHub Actions.
 
 ## Checks
 

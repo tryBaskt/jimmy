@@ -21,6 +21,7 @@ This PR implements the ground-up application and deployable infrastructure. The 
 | Live plans/processes/results and durable event replay | Implemented; socket notifications with cursor replay/polling fallback |
 | API Gateway service routing | Separate service routers and Lambda instances behind one HTTP gateway; shared metadata table initially |
 | New AWS resources and separate dev/prod Actions | Implemented; one-time bootstrap and GitHub environments required; no deployment performed by this PR |
+| Deployment secret provisioning | GitHub environment secrets for account/role, Bigdata API key and alert email; AWS Secrets Manager sync for key/email without plaintext Terraform state; SNS email configured separately after deployment |
 | Generic paper-quality score or proof of correctness | Deliberately absent |
 
 Remaining production-hardening work should be tracked separately: provider entitlements, a human-scored extraction benchmark, account-specific model invocation smoke tests, broader scientific templates, verification of cancellation/failure reconciliation under real ECS failures, subscription TTL cleanup and data lifecycle automation.

@@ -128,6 +128,12 @@ resource "aws_iam_role_policy" "deploy" {
         Effect = "Allow", Action = ["ecr:GetAuthorizationToken"], Resource = "*"
       },
       {
+        Effect = "Allow", Action = ["secretsmanager:CreateSecret", "secretsmanager:PutSecretValue"], Resource = [
+          "arn:aws:secretsmanager:${var.region}:${local.account}:secret:jimmy-${each.key}-bigdata-api-key-??????",
+          "arn:aws:secretsmanager:${var.region}:${local.account}:secret:jimmy-${each.key}-alert-email-??????"
+        ]
+      },
+      {
         Effect = "Allow", Action = ["logs:*"], Resource = ["arn:aws:logs:${var.region}:${local.account}:log-group:/aws/lambda/jimmy-${each.key}-*", "arn:aws:logs:${var.region}:${local.account}:log-group:/ecs/jimmy-${each.key}-*"]
       },
       {
