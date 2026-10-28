@@ -427,8 +427,16 @@ class Workflow:
                         result_key = artifact(
                             self.store, self.project, self.run_id, f"result-{exp.id}", calculated
                         )
+                        wealth, curve = 1.0, []
+                        points = calculated["series"]
+                        stride = max(1, (len(points) + 179) // 180)
+                        for point_index, point in enumerate(points):
+                            wealth *= 1 + point["return"]
+                            if point_index % stride == 0 or point_index == len(points) - 1:
+                                curve.append({"date": point["date"], "value": wealth})
                         result = {
                             **item,
+                            "curve": curve,
                             "status": "completed",
                             "result": result_key,
                             "metrics": calculated["metrics"],

@@ -1,6 +1,7 @@
 """AWS Textract fallback for scanned PDFs; preserves page-level source references."""
 
 import time
+from paperlab.storage import digest
 
 
 def extract(settings, upload, notify):
@@ -15,7 +16,9 @@ def extract(settings, upload, notify):
     job = client.start_document_analysis(
         DocumentLocation={"S3Object": {"Bucket": settings.bucket, "Name": upload["key"]}},
         FeatureTypes=["TABLES"],
-        ClientRequestToken=upload["checksum"],
+        ClientRequestToken=digest(
+            {"bucket": settings.bucket, "key": upload["key"], "checksum": upload["checksum"]}
+        ),
     )["JobId"]
     deadline = time.monotonic() + 600
     while time.monotonic() < deadline:
