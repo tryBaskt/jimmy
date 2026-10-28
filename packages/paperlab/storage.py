@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from hashlib import sha256
 from pathlib import Path
 import json
+import random
 import sqlite3
 import threading
 import time
@@ -175,7 +176,7 @@ def emit(store, project, kind, summary, *, run_id=None, experiment_id=None, deta
             "artifact": artifact(store, project, run_id or "activity", "activity-detail", detail),
             "message": "Large event detail is available as an artifact",
         }
-    for _ in range(12):
+    for attempt in range(12):
         counter, rev = store.get(pk, "cursor")
         seq = (counter or {}).get("sequence", 0) + 1
         cursor = f"event#{seq:016d}"
@@ -196,6 +197,10 @@ def emit(store, project, kind, summary, *, run_id=None, experiment_id=None, deta
             store.batch([(pk, "cursor", {"sequence": seq}, rev), (pk, cursor, event, 0)])
             return event
         except Conflict:
+            # Yield with bounded jitter so concurrent writers can finish instead
+            # of repeatedly colliding on the same optimistic cursor revision.
+            if attempt < 11:
+                time.sleep(random.uniform(0.001, min(0.05, 0.002 * 2**attempt)))
             continue
     raise Conflict("Activity stream contention")
 

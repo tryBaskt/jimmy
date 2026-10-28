@@ -26,6 +26,35 @@ def test_event_cursor_atomic_and_replay(store):
     assert len(store.query("project#p", "event#", after=rows[9][0])) == 10
 
 
+@pytest.mark.parametrize("conflicts", [3, 12])
+def test_event_cursor_contention_backs_off_and_remains_bounded(store, monkeypatch, conflicts):
+    from paperlab import storage
+
+    attempts = []
+    delays = []
+    original_batch = store.batch
+
+    def batch(writes):
+        attempts.append(writes)
+        if len(attempts) <= conflicts:
+            raise Conflict()
+        original_batch(writes)
+
+    monkeypatch.setattr(store, "batch", batch)
+    monkeypatch.setattr(storage.time, "sleep", delays.append)
+    if conflicts < 12:
+        assert emit(store, "p", "test", "retry")["sequence"] == 1
+        assert len(attempts) == conflicts + 1
+        assert len(store.query("project#p", "event#")) == 1
+    else:
+        with pytest.raises(Conflict, match="Activity stream contention"):
+            emit(store, "p", "test", "retry")
+        assert len(attempts) == 12
+        assert store.query("project#p", "event#") == []
+    assert len(delays) == min(conflicts, 11)
+    assert all(0.001 <= delay <= 0.05 for delay in delays)
+
+
 def test_catalog_hit_deduplicates_across_projects(store):
     calls = []
 
