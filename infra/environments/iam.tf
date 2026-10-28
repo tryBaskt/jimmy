@@ -165,7 +165,7 @@ resource "aws_iam_role_policy" "workflow" {
   policy = jsonencode({
     Version = "2012-10-17", Statement = [
       {
-        Effect = "Allow", Action = ["ecs:RunTask"], Resource = [for task in aws_ecs_task_definition.task : task.arn]
+        Effect = "Allow", Action = ["ecs:RunTask"], Resource = [for task in aws_ecs_task_definition.task : "${task.arn_without_revision}:*"]
       },
       {
         Effect = "Allow", Action = ["ecs:StopTask", "ecs:DescribeTasks"], Resource = "arn:aws:ecs:${var.region}:${local.account}:task/${aws_ecs_cluster.compute.name}/*"

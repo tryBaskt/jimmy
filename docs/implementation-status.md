@@ -22,6 +22,7 @@ This PR implements the ground-up application and deployable infrastructure. The 
 | API Gateway service routing | Separate service routers and Lambda instances behind one HTTP gateway; shared metadata table initially |
 | New AWS resources and separate dev/prod Actions | Bootstrap applied and read back on 2026-10-28: deployment roles/secret-write policies, immutable image repositories and private versioned state buckets; follow-up plan shows no changes. Application deployment remains pending; new frontend bucket name avoids the legacy app's bucket |
 | Deployment secret provisioning | GitHub environment secrets for account/role, Bigdata API key and alert email; AWS Secrets Manager sync for key/email without plaintext Terraform state; SNS email configured separately after deployment |
+| Component deployment jobs | Separate secret/build/infrastructure/API/realtime/task/workflow/frontend/alerts/verification jobs; one Terraform writer, commit-bound artifacts and pinned task revisions |
 | Generic paper-quality score or proof of correctness | Deliberately absent |
 
 Remaining production-hardening work should be tracked separately: provider entitlements, a human-scored extraction benchmark, account-specific model invocation smoke tests, broader scientific templates, verification of cancellation/failure reconciliation under real ECS failures, subscription TTL cleanup and data lifecycle automation.

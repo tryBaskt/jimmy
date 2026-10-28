@@ -138,6 +138,10 @@ resource "aws_iam_role_policy" "deploy" {
         Effect = "Allow", Action = ["logs:*"], Resource = ["arn:aws:logs:${var.region}:${local.account}:log-group:/aws/lambda/jimmy-${each.key}-*", "arn:aws:logs:${var.region}:${local.account}:log-group:/ecs/jimmy-${each.key}-*"]
       },
       {
+        # DescribeLogGroups is an account-level listing operation used by Terraform.
+        Effect = "Allow", Action = ["logs:DescribeLogGroups"], Resource = "*"
+      },
+      {
         Effect = "Allow", Action = ["iam:CreateRole", "iam:GetRole", "iam:DeleteRole", "iam:UpdateAssumeRolePolicy", "iam:TagRole", "iam:UntagRole", "iam:PutRolePolicy", "iam:GetRolePolicy", "iam:DeleteRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies", "iam:PassRole"], Resource = "arn:aws:iam::${local.account}:role/jimmy-${each.key}/jimmy-${each.key}-*"
       },
       {

@@ -116,9 +116,33 @@ The alert recipient is configured through SNS after infrastructure deployment, o
 
 Private values are sent directly from step-scoped environment variables to the AWS SDK, not command arguments, files, Terraform inputs/state or job output. Never place them in GitHub variables, prompts or this repository. The sync uses the AWS-managed Secrets Manager encryption key; customer-managed keys require additional write/decrypt permissions. Changing a GitHub secret takes effect on the next environment deployment, which creates a new stored version; newly launched worker tasks receive it, while already-running tasks retain their injected value. Repeated syncs create versions; do not run this as a high-frequency rotation loop. Terraform destroy does not remove these deployment-managed secrets; retire them separately when decommissioning an environment. Deleting the SNS topic removes its subscriptions.
 
-- **Merge to `dev`:** `deploy-dev.yml` runs CI, builds/pushes both images, applies the dev infrastructure, builds/uploads the frontend, waits for cache invalidation and smoke-checks the API/configuration. Its Actions summary contains the **frontend URL**. Terraform also outputs it.
+- **Merge to `dev`:** `deploy-dev.yml` invokes the component workflow: CI, secret provisioning, separate backend/worker image builds and frontend build, infrastructure provisioning, per-service backend and realtime releases, worker/runner registration, research workflow release, alerts, frontend publishing and final verification. Its Actions summary contains the **frontend URL**. Terraform also outputs it.
 - **Production:** manually dispatch `deploy-prod.yml` from `main`. Configure required reviewers and branch restrictions on the `prod` GitHub environment. Production uses separate state, image repositories, identity, data and compute.
 - The workflows never merge branches. Branch protection should require the CI checks before merging.
+
+### Separate deployment jobs
+
+Dev and prod keep separate entry workflows and environment protection. Both call `deploy-components.yml`, whose jobs appear separately in Actions:
+
+| Job | Responsibility |
+| --- | --- |
+| Checks | Run the existing CI suite |
+| Provision secrets | Copy key/email privately into Secrets Manager; export only ARN references |
+| Build backend / build workers / build frontend | Produce independent build artifacts |
+| Provision infrastructure | The sole Terraform-state writer; network, identity, storage, permissions and runtime resource configuration |
+| Backend API matrix | Release each of the six APIs separately, wait for readiness and verify its immutable image digest |
+| Realtime handler matrix | Release connections, publisher and reconciler separately |
+| Research task matrix | Register worker and numerical runner revisions separately |
+| Release research workflow | Wait for both task jobs, then update the desired graph with exact task revision ARNs |
+| Configure alerts | Configure the private SNS recipient separately |
+| Publish frontend | Generate runtime configuration, upload assets and invalidate CloudFront after component releases succeed |
+| Verify deployment | Check API and frontend availability and publish the frontend link |
+
+Terraform retains the existing `application.tfstate` key and provisions initial runtime resources, but ignores subsequent Lambda image changes, ECS container definitions and state-machine definitions. Component jobs own those releases from desired templates exported by Terraform. They do not perform parallel Terraform applies or use `-target`. IAM allows Step Functions to run revisions only within the environment's two task families; the released workflow pins full revision ARNs. Already-running Standard executions retain their prior graph. There is no automatic rollback across the whole application; API releases record previous digests and a failed task job prevents the workflow/frontend release.
+
+Artifacts contain configuration, commit/environment metadata, immutable image references and task receipts, never API keys or email values. Digest, commit and environment validation reject mismatched release inputs. Artifacts are retained for seven days and support rerunning failed jobs; rerun the entire workflow if artifacts have expired or build inputs have changed. The existing application state is retained after a partial apply; do not delete it to recover a failed deployment.
+
+The deployment fixes use a DynamoDB **gateway** endpoint with a private-subnet route and an explicit runner security-group prefix-list allowance. The deployment role also requires account-level `logs:DescribeLogGroups`, while log mutation permissions remain scoped to the environment. Lambda receives AWS's built-in `AWS_REGION`; only ECS templates explicitly set that variable.
 
 Cognito sign-up is invitation-only. After the first deployment, an administrator creates a user with the new user-pool ID output:
 
