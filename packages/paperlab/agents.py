@@ -14,7 +14,7 @@ class BedrockAgents:
         self.client = boto3.Session(region_name=settings.region).client(
             "bedrock-runtime",
             config=Config(
-                connect_timeout=5, read_timeout=180, retries={"total_max_attempts": 3, "mode": "adaptive"}
+                connect_timeout=5, read_timeout=300, retries={"total_max_attempts": 3, "mode": "adaptive"}
             ),
         )
         self.settings, self.store, self.project, self.run, self.notify = settings, store, project, run, notify
@@ -36,27 +36,60 @@ class BedrockAgents:
             "citations or completed experiments. Preserve unfavorable evidence. Never select data based on "
             "returns. No user approval/correction is available. Task: " + task
         )
-        response = self.client.converse(
-            modelId=model,
-            system=[{"text": prompt}],
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "text": json.dumps(
-                                {"input": payload, "output_schema": schema.model_json_schema()}, default=str
-                            )
-                        }
-                    ],
-                }
-            ],
-            inferenceConfig={"maxTokens": 12000},
+        encoded_input = json.dumps(
+            {"input": payload, "output_schema": schema.model_json_schema()}, default=str
         )
-        if response.get("stopReason") not in {"end_turn", "stop_sequence"}:
-            raise ValueError("Model response incomplete or refused")
-        # Discard reasoning blocks; never replay Kimi reasoning or attach raw document content blocks.
-        text = "".join(b["text"] for b in response["output"]["message"]["content"] if "text" in b)
+        if "moonshotai.kimi-k3" in model:
+            # Kimi defaults to maximum reasoning. Use its native API so the
+            # requested effort is honored rather than relying on Converse's
+            # unvalidated additionalModelRequestFields passthrough.
+            effort = "low" if worker else "high"
+            budget = 8192 if worker else 32768
+            response = self.client.invoke_model(
+                modelId=model,
+                contentType="application/json",
+                accept="application/json",
+                body=json.dumps({
+                    "messages": [
+                        {"role": "system", "content": prompt},
+                        {"role": "user", "content": encoded_input},
+                    ],
+                    "reasoning_effort": effort,
+                    "max_tokens": budget,
+                }),
+            )
+            with response["body"] as body:
+                native = json.loads(body.read())
+            choice = native["choices"][0]
+            stopped = choice.get("finish_reason", "unknown")
+            native_usage = native.get("usage", {})
+            usage = {
+                "inputTokens": native_usage.get("prompt_tokens", 0),
+                "outputTokens": native_usage.get("completion_tokens", 0),
+                "totalTokens": native_usage.get("total_tokens", 0),
+            }
+            text = choice.get("message", {}).get("content") or ""
+            complete = stopped == "stop" and bool(text)
+            metadata = {"api": "InvokeModel", "reasoning_effort": effort, "max_output_tokens": budget}
+        else:
+            response = self.client.converse(
+                modelId=model,
+                system=[{"text": prompt}],
+                messages=[{"role": "user", "content": [{"text": encoded_input}]}],
+                inferenceConfig={"maxTokens": 12000},
+            )
+            stopped = response.get("stopReason", "unknown")
+            usage = response.get("usage", {})
+            text = "".join(b["text"] for b in response["output"]["message"]["content"] if "text" in b)
+            complete = stopped in {"end_turn", "stop_sequence"} and bool(text)
+            metadata = {"api": "Converse", "max_output_tokens": 12000}
+        self.notify(
+            "agent_response", "Model response received" if complete else "Model response incomplete",
+            {"model": model, "stop_reason": stopped, "usage": usage, **metadata},
+        )
+        if not complete:
+            raise ValueError("Model response incomplete or refused; inspect the agent response event")
+        # Never persist or replay Kimi reasoning content; retain only validated JSON.
         text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
         parsed = schema.model_validate_json(text)
         key = artifact(
@@ -69,8 +102,9 @@ class BedrockAgents:
                 "task": task,
                 "input": payload,
                 "output": parsed.model_dump(mode="json"),
-                "usage": response.get("usage", {}),
-                "prompt_version": "1",
+                "usage": usage,
+                **metadata,
+                "prompt_version": "2",
             },
         )
         self.notify("agent_completed", f"Completed {task}", {"model": model, "artifact": key})
