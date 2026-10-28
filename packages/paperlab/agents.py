@@ -2,8 +2,18 @@
 
 import json
 import re
-from paperlab.models import PaperPlan, Selection, Extensions
+from pydantic import Field
+from paperlab.models import Citation, Contract, PaperPlan, Selection, Extensions
 from paperlab.storage import artifact
+
+
+class CitationRepair(Contract):
+    path: str
+    citation: Citation
+
+
+class CitationRepairs(Contract):
+    repairs: list[CitationRepair] = Field(min_length=1, max_length=1000)
 
 
 class BedrockAgents:
@@ -111,17 +121,49 @@ class BedrockAgents:
         return parsed
 
     def plan(self, pages):
-        return self.call(
+        plan = self.call(
             "Identify the main claim and full central experiment suite. Use unsupported for methods "
             "outside equal-weight monthly momentum sorts or explicit return-series analysis. "
             "Citations must quote actual page text. Expected values must include a matching source "
             "quote, units converted to decimals, and a justified numerical tolerance. "
             "Do not invent a universe of tickers; leave symbols empty if not specified. "
             "Monthly skip cannot represent a one-week gap; disclose this limitation. "
-            "Dependencies must refer to experiment IDs.",
+            "Dependencies must refer to experiment IDs. Citation page numbers MUST use the supplied "
+            "page field (1-based PDF pages), not printed journal page numbers. Copy quotations verbatim.",
             {"pages": pages},
             PaperPlan,
         )
+        for attempt in range(3):
+            try:
+                verify_citations(plan, pages)
+                return plan
+            except CitationValidationError as error:
+                self.notify(
+                    "citation_validation_failed", "Planner citations require correction",
+                    {"attempt": attempt + 1, "issues": error.issues, "repair_available": attempt < 2},
+                )
+                if attempt == 2:
+                    raise
+                repaired = self.call(
+                    "Repair only the listed citation errors in this paper plan. Use the supplied PDF page "
+                    "fields and exact quotations. Candidate pages indicate exact quote matches, not "
+                    "permission to choose unrelated evidence. Preserve the main claim, all experiments, "
+                    "dependencies, counterevidence and limitations; do not remove evidence to pass "
+                    "validation. Return replacements for the exact listed paths, each with a citation "
+                    "containing the correct page and verbatim quote. Do not return a new plan.",
+                    {"pages": pages, "previous_plan": plan.model_dump(mode="json"),
+                     "citation_errors": error.issues},
+                    CitationRepairs,
+                )
+                allowed = {issue["path"] for issue in error.issues}
+                replacements = {r.path: r.citation for r in repaired.repairs}
+                if len(replacements) != len(repaired.repairs) or not replacements.keys() <= allowed:
+                    raise ValueError("Citation repair contains duplicate or unrequested paths")
+                plan = plan.model_copy(deep=True)
+                for path, citation in _citation_references(plan):
+                    if path in replacements:
+                        citation.page = replacements[path].page
+                        citation.quote = replacements[path].quote
 
     def select(self, experiment, candidates, attempt):
         return self.call(
@@ -147,13 +189,28 @@ class BedrockAgents:
         )
 
 
+class CitationValidationError(ValueError):
+    def __init__(self, issues):
+        self.issues = issues
+        super().__init__(f"{len(issues)} citation(s) cannot be grounded in the cited PDF pages")
+
+
+def _citation_references(plan):
+    references = [(f"citations[{i}]", c) for i, c in enumerate(plan.citations)]
+    for i, exp in enumerate(plan.experiments):
+        references.extend((f"experiments[{i}].citations[{j}]", c) for j, c in enumerate(exp.citations))
+        references.extend((f"experiments[{i}].expected[{j}].citation", v.citation)
+                          for j, v in enumerate(exp.expected))
+    return references
+
+
 def verify_citations(plan, pages):
     source = {p["page"]: " ".join(p["text"].split()).casefold() for p in pages}
-    references = list(plan.citations)
-    for exp in plan.experiments:
-        references.extend(exp.citations)
-        references.extend(v.citation for v in exp.expected)
-    for citation in references:
+    issues = []
+    for path, citation in _citation_references(plan):
         quote = " ".join(citation.quote.split()).casefold()
-        if citation.page not in source or quote not in source[citation.page]:
-            raise ValueError(f"Citation cannot be grounded on page {citation.page}")
+        if not quote or citation.page not in source or quote not in source[citation.page]:
+            issues.append({"path": path, "page": citation.page, "quote": citation.quote,
+                           "matching_pdf_pages": [p for p, text in source.items() if quote and quote in text]})
+    if issues:
+        raise CitationValidationError(issues)
