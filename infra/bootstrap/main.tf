@@ -123,6 +123,10 @@ resource "aws_iam_role_policy" "deploy" {
         Effect = "Allow", Action = ["states:*"], Resource = ["arn:aws:states:${var.region}:${local.account}:stateMachine:jimmy-${each.key}-*", "arn:aws:states:${var.region}:${local.account}:execution:jimmy-${each.key}-*:*"]
       },
       {
+        # Terraform validates ASL before a named state-machine resource exists.
+        Effect = "Allow", Action = ["states:ValidateStateMachineDefinition"], Resource = "*"
+      },
+      {
         Effect = "Allow", Action = ["ecr:*"], Resource = "arn:aws:ecr:${var.region}:${local.account}:repository/jimmy-${each.key}-*"
       },
       {
