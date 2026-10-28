@@ -1,1 +1,0 @@
-"""Jimmy HTTP API application."""
