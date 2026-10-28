@@ -19,7 +19,7 @@ variable "worker_image" {
 }
 variable "planner_model_id" {
   type    = string
-  default = "us.openai.gpt-6-astra"
+  default = "us.moonshotai.kimi-k3"
 }
 variable "worker_model_id" {
   type    = string
@@ -29,7 +29,7 @@ variable "bedrock_model_arns" {
 
   description = "Regional foundation-model and inference-profile ARNs allowed for the configured models."
   type        = list(string)
-  default     = ["arn:aws:bedrock:*::foundation-model/openai.gpt-6-astra*", "arn:aws:bedrock:*::foundation-model/moonshotai.kimi-k3*", "arn:aws:bedrock:*:*:inference-profile/us.openai.gpt-6-astra*", "arn:aws:bedrock:*:*:inference-profile/us.moonshotai.kimi-k3*"]
+  default     = ["arn:aws:bedrock:*::foundation-model/moonshotai.kimi-k3*", "arn:aws:bedrock:*:*:inference-profile/us.moonshotai.kimi-k3*"]
 
 }
 variable "bigdata_secret_arn" {
