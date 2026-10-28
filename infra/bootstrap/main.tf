@@ -120,6 +120,28 @@ resource "aws_iam_role_policy" "deploy" {
         Effect = "Allow", Action = ["lambda:*"], Resource = "arn:aws:lambda:${var.region}:${local.account}:function:jimmy-${each.key}-*"
       },
       {
+        Effect = "Allow", Action = ["lambda:CreateEventSourceMapping"], Resource = "*", Condition = {
+          ArnEquals = { "lambda:FunctionArn" = "arn:aws:lambda:${var.region}:${local.account}:function:jimmy-${each.key}-publisher" }
+        }
+      },
+      {
+        Effect = "Allow", Action = ["lambda:GetEventSourceMapping", "lambda:UpdateEventSourceMapping", "lambda:DeleteEventSourceMapping"], Resource = "arn:aws:lambda:${var.region}:${local.account}:event-source-mapping:*", Condition = {
+          ArnEquals = { "lambda:FunctionArn" = "arn:aws:lambda:${var.region}:${local.account}:function:jimmy-${each.key}-publisher" }
+        }
+      },
+      {
+        Effect = "Allow", Action = ["lambda:TagResource"], Resource = "arn:aws:lambda:${var.region}:${local.account}:event-source-mapping:*", Condition = {
+          StringEquals = { "aws:RequestTag/Environment" = each.key }
+          Null         = { "aws:ResourceTag/Environment" = "true" }
+        }
+      },
+      {
+        Effect = "Allow", Action = ["lambda:ListTags", "lambda:TagResource", "lambda:UntagResource"], Resource = "arn:aws:lambda:${var.region}:${local.account}:event-source-mapping:*", Condition = {
+          StringEquals         = { "aws:ResourceTag/Environment" = each.key }
+          StringEqualsIfExists = { "aws:RequestTag/Environment" = each.key }
+        }
+      },
+      {
         Effect = "Allow", Action = ["states:*"], Resource = ["arn:aws:states:${var.region}:${local.account}:stateMachine:jimmy-${each.key}-*", "arn:aws:states:${var.region}:${local.account}:execution:jimmy-${each.key}-*:*"]
       },
       {
