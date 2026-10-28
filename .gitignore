@@ -13,6 +13,8 @@ dist/
 infra/terraform.tfvars
 infra/bootstrap/*.tfvars
 infra/bootstrap/*.tfplan
+infra/environments/*.tfvars
+infra/environments/*.tfplan
 build/
 *.egg-info/
 /artifacts/

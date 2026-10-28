@@ -24,6 +24,7 @@ import {
   api,
   config,
   initialize,
+  hasSession,
   liveSubscribe,
   login,
   logout,
@@ -160,14 +161,17 @@ function App() {
     return v.items;
   };
   useEffect(() => {
-    initialize()
-      .then(() => api("/api/identity/me"))
-      .then(() => {
-        setSigned(true);
-        return refreshProjects();
-      })
+    (async () => {
+      await initialize();
+      if (!config.local && !hasSession()) return;
+      await api("/api/identity/me");
+      setSigned(true);
+      await refreshProjects();
+    })()
       .catch((e) => {
-        if (config.local) setError(e.message);
+        setError(
+          e instanceof Error ? e.message : "Sign-in failed. Please try again.",
+        );
       })
       .finally(() => setReady(true));
   }, []);
@@ -333,7 +337,13 @@ function App() {
           Reconstruct experiments, follow every decision, and see how findings
           extend beyond the original sample.
         </p>
-        <button onClick={() => void login()}>
+        <button
+          onClick={() =>
+            void login().catch((e) =>
+              setError(e instanceof Error ? e.message : "Unable to start sign-in."),
+            )
+          }
+        >
           Sign in to workspace <ArrowRight size={16} />
         </button>
         {error && <p className="error">{error}</p>}

@@ -142,6 +142,8 @@ Terraform retains the existing `application.tfstate` key and provisions initial 
 
 Artifacts contain configuration, commit/environment metadata, immutable image references and task receipts, never API keys or email values. Digest, commit and environment validation reject mismatched release inputs. Artifacts are retained for seven days and support rerunning failed jobs; rerun the entire workflow if artifacts have expired or build inputs have changed. The existing application state is retained after a partial apply; do not delete it to recover a failed deployment.
 
+Browser sign-in also requires unauthenticated preflight routes at the same path specificity as each protected `ANY` route. API Gateway must accept `OPTIONS` without a JWT before the browser can send the authenticated request; actual API methods remain JWT-protected. `scripts/verify_cors.py` checks every service prefix and the projects root during deployment, then confirms an unauthenticated identity GET is rejected. The frontend skips identity checks for a signed-out visitor, exchanges a callback only once, validates the identity-token response and displays sign-in failures instead of silently returning to the landing page.
+
 The deployment fixes use a DynamoDB **gateway** endpoint with a private-subnet route and an explicit runner security-group prefix-list allowance. The deployment role also requires account-level `logs:DescribeLogGroups`, while log mutation permissions remain scoped to the environment. Lambda receives AWS's built-in `AWS_REGION`; only ECS templates explicitly set that variable.
 
 Cognito sign-up is invitation-only. After the first deployment, an administrator creates a user with the new user-pool ID output:

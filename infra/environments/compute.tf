@@ -144,6 +144,17 @@ resource "aws_lambda_permission" "http" {
 
 }
 
+resource "aws_apigatewayv2_route" "preflight" {
+  # Match each protected route's path specificity so its ANY method cannot
+  # capture OPTIONS and require a JWT before the browser can send one.
+  for_each = { for route, service in local.routes : "OPTIONS ${split(" ", route)[1]}" => service }
+
+  api_id             = aws_apigatewayv2_api.http.id
+  route_key          = each.key
+  authorization_type = "NONE"
+  target             = "integrations/${aws_apigatewayv2_integration.service[each.value].id}"
+}
+
 resource "aws_apigatewayv2_authorizer" "identity" {
   api_id           = aws_apigatewayv2_api.http.id
   name             = "${local.prefix}-jwt"
