@@ -23,13 +23,17 @@ resource "aws_lambda_function" "realtime" {
   role          = aws_iam_role.lambda[each.key].arn
   package_type  = "Image"
   image_uri     = var.api_image
-  timeout       = 30
-  memory_size   = 512
+  lifecycle {
+    # Component release jobs own image changes after initial provisioning.
+    ignore_changes = [image_uri]
+  }
+  timeout     = 30
+  memory_size = 512
   image_config {
     command = [each.key == "connections" ? "paperlab.realtime.connection_handler" : each.key == "publisher" ? "paperlab.realtime.publisher" : "paperlab.reconcile.handler"]
   }
   environment {
-    variables = merge(local.env, {
+    variables = merge({ for k, v in local.env : k => v if k != "AWS_REGION" }, {
       WEBSOCKET_MANAGEMENT_ENDPOINT = "https://${aws_apigatewayv2_api.live.id}.execute-api.${var.region}.amazonaws.com/${var.environment}"
     })
   }

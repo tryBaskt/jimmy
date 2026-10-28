@@ -1,0 +1,21 @@
+name: AWS deployment session
+description: Configure a short-lived AWS session and the pinned deployment SDK
+inputs:
+  role-arn:
+    description: Environment deployment role
+    required: true
+  region:
+    description: AWS deployment region
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ inputs.role-arn }}
+        aws-region: ${{ inputs.region }}
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - shell: bash
+      run: pip install -c requirements.lock boto3

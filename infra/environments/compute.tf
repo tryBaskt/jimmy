@@ -37,81 +37,23 @@ resource "aws_ecs_task_definition" "task" {
   volume {
     name = "tmp"
   }
-  container_definitions = jsonencode([{
-
-    name                   = "task", image = var.worker_image, essential = true,
-    readonlyRootFilesystem = true, user = "10001", stopTimeout = 60,
-    mountPoints = [{
-      sourceVolume = "tmp", containerPath = "/tmp", readOnly = false
-    }],
-    environment = [for k, v in local.env : {
-      name = k, value = v
-    }],
-    secrets = each.key == "worker" && var.bigdata_secret_arn != "" ? [{
-      name = "BIGDATA_API_KEY", valueFrom = var.bigdata_secret_arn
-    }] : [],
-    logConfiguration = {
-      logDriver = "awslogs", options = {
-        "awslogs-group" = aws_cloudwatch_log_group.worker.name, "awslogs-region" = var.region, "awslogs-stream-prefix" = each.key, "mode" = "blocking"
-      }
-    }
-
-  }])
+  container_definitions = jsonencode(local.task_templates[each.key].containerDefinitions)
+  lifecycle {
+    # Release jobs register desired templates from the deployment contract.
+    ignore_changes = [container_definitions]
+  }
 
 }
 resource "aws_sfn_state_machine" "research" {
 
-  name     = "${local.prefix}-research"
-  role_arn = aws_iam_role.workflow.arn
-  type     = "STANDARD"
-  definition = jsonencode({
-    StartAt = local.stages[0], TimeoutSeconds = 10800, States = merge({
-
-      for i, stage in local.stages : stage => merge({
-
-        Type = "Task", Resource = "arn:aws:states:::ecs:runTask.sync", TimeoutSeconds = 1800,
-        Parameters = {
-
-          Cluster        = aws_ecs_cluster.compute.arn, LaunchType = "FARGATE", PlatformVersion = "LATEST",
-          TaskDefinition = aws_ecs_task_definition.task[contains(["run", "extension_run"], stage) ? "runner" : "worker"].arn,
-          NetworkConfiguration = {
-            AwsvpcConfiguration = {
-              Subnets = [aws_subnet.private.id], AssignPublicIp = "DISABLED", SecurityGroups = [contains(["run", "extension_run"], stage) ? aws_security_group.runner.id : aws_security_group.worker.id]
-            }
-          },
-          Overrides = {
-            ContainerOverrides = [{
-              Name = "task", Environment = [{
-                Name = "STAGE", Value = stage
-                }, {
-                Name = "PROJECT_ID", "Value.$" = "$.project_id"
-                }, {
-                Name = "RUN_ID", "Value.$" = "$.run_id"
-              }]
-            }]
-          }
-
-        },
-        ResultPath = null,
-        Retry = [{
-          ErrorEquals = ["ECS.AmazonECSException", "ECS.ServerException"], IntervalSeconds = 5, MaxAttempts = 2, BackoffRate = 2
-        }],
-        Catch = [{
-          ErrorEquals = ["States.ALL"], ResultPath = "$.failure", Next = "Failed"
-        }]
-
-        }, i == length(local.stages) - 1 ? {
-        End = true
-        } : {
-        Next = local.stages[i + 1]
-      })
-
-      }, {
-      Failed = {
-        Type = "Fail", Error = "ExperimentWorkflowFailed", Cause = "Inspect persisted stage events and task logs"
-      }
-    })
-  })
+  name       = "${local.prefix}-research"
+  role_arn   = aws_iam_role.workflow.arn
+  type       = "STANDARD"
+  definition = jsonencode(local.workflow_definition)
+  lifecycle {
+    # The workflow release job publishes the desired graph with pinned task ARNs.
+    ignore_changes = [definition]
+  }
   depends_on = [aws_iam_role_policy.workflow]
 
 }
@@ -122,10 +64,14 @@ resource "aws_lambda_function" "api" {
   role          = aws_iam_role.lambda[each.key].arn
   package_type  = "Image"
   image_uri     = var.api_image
-  timeout       = 60
-  memory_size   = 1024
+  lifecycle {
+    # Infrastructure owns configuration; per-service release jobs own code.
+    ignore_changes = [image_uri]
+  }
+  timeout     = 60
+  memory_size = 1024
   environment {
-    variables = merge(local.env, {
+    variables = merge({ for k, v in local.env : k => v if k != "AWS_REGION" }, {
       API_SERVICE = each.key, WORKFLOW_ARN = aws_sfn_state_machine.research.arn
     })
   }
@@ -206,5 +152,89 @@ resource "aws_apigatewayv2_authorizer" "identity" {
   jwt_configuration {
     audience = [aws_cognito_user_pool_client.web.id]
     issuer   = local.env.JWT_ISSUER
+  }
+}
+
+locals {
+  task_templates = {
+    for kind in ["worker", "runner"] : kind => {
+      family                  = "${local.prefix}-${kind}"
+      requiresCompatibilities = ["FARGATE"]
+      networkMode             = "awsvpc"
+      cpu                     = "1024"
+      memory                  = "4096"
+      executionRoleArn        = aws_iam_role.execution.arn
+      taskRoleArn             = aws_iam_role.task[kind].arn
+      runtimePlatform         = { cpuArchitecture = "X86_64", operatingSystemFamily = "LINUX" }
+      volumes                 = [{ name = "tmp" }]
+      containerDefinitions = [{
+
+        name                   = "task", image = var.worker_image, essential = true,
+        readonlyRootFilesystem = true, user = "10001", stopTimeout = 60,
+        mountPoints = [{
+          sourceVolume = "tmp", containerPath = "/tmp", readOnly = false
+        }],
+        environment = [for k, v in local.env : {
+          name = k, value = v
+        }],
+        secrets = kind == "worker" && var.bigdata_secret_arn != "" ? [{
+          name = "BIGDATA_API_KEY", valueFrom = var.bigdata_secret_arn
+        }] : [],
+        logConfiguration = {
+          logDriver = "awslogs", options = {
+            "awslogs-group" = aws_cloudwatch_log_group.worker.name, "awslogs-region" = var.region, "awslogs-stream-prefix" = kind, "mode" = "blocking"
+          }
+        }
+
+      }]
+    }
+  }
+  workflow_definition = {
+    StartAt = local.stages[0], TimeoutSeconds = 10800, States = merge({
+
+      for i, stage in local.stages : stage => merge({
+
+        Type = "Task", Resource = "arn:aws:states:::ecs:runTask.sync", TimeoutSeconds = 1800,
+        Parameters = {
+
+          Cluster        = aws_ecs_cluster.compute.arn, LaunchType = "FARGATE", PlatformVersion = "LATEST",
+          TaskDefinition = aws_ecs_task_definition.task[contains(["run", "extension_run"], stage) ? "runner" : "worker"].arn,
+          NetworkConfiguration = {
+            AwsvpcConfiguration = {
+              Subnets = [aws_subnet.private.id], AssignPublicIp = "DISABLED", SecurityGroups = [contains(["run", "extension_run"], stage) ? aws_security_group.runner.id : aws_security_group.worker.id]
+            }
+          },
+          Overrides = {
+            ContainerOverrides = [{
+              Name = "task", Environment = [{
+                Name = "STAGE", Value = stage
+                }, {
+                Name = "PROJECT_ID", "Value.$" = "$.project_id"
+                }, {
+                Name = "RUN_ID", "Value.$" = "$.run_id"
+              }]
+            }]
+          }
+
+        },
+        ResultPath = null,
+        Retry = [{
+          ErrorEquals = ["ECS.AmazonECSException", "ECS.ServerException"], IntervalSeconds = 5, MaxAttempts = 2, BackoffRate = 2
+        }],
+        Catch = [{
+          ErrorEquals = ["States.ALL"], ResultPath = "$.failure", Next = "Failed"
+        }]
+
+        }, i == length(local.stages) - 1 ? {
+        End = true
+        } : {
+        Next = local.stages[i + 1]
+      })
+
+      }, {
+      Failed = {
+        Type = "Fail", Error = "ExperimentWorkflowFailed", Cause = "Inspect persisted stage events and task logs"
+      }
+    })
   }
 }

@@ -31,3 +31,16 @@ output "artifact_bucket" {
 output "alerts_topic_arn" {
   value = aws_sns_topic.alerts.arn
 }
+output "release_contract" {
+  description = "Desired non-secret component configuration consumed by release jobs."
+  value = {
+    environment         = var.environment
+    api_image           = var.api_image
+    worker_image        = var.worker_image
+    api_functions       = { for name, function in aws_lambda_function.api : name => function.function_name }
+    realtime_functions  = { for name, function in aws_lambda_function.realtime : name => function.function_name }
+    task_templates      = local.task_templates
+    workflow_definition = local.workflow_definition
+    workflow_arn        = aws_sfn_state_machine.research.arn
+  }
+}

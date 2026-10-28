@@ -1,0 +1,365 @@
+name: Deploy components
+on:
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: jimmy-${{ inputs.environment }}-deployment
+  cancel-in-progress: false
+jobs:
+  checks:
+    if: inputs.environment == 'dev' || (inputs.environment == 'prod' && github.ref == 'refs/heads/main')
+    uses: ./.github/workflows/ci.yml
+  secrets:
+    name: Provision secrets
+    needs: checks
+    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEPLOY_ENV: ${{ inputs.environment }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/aws-session
+        with:
+          role-arn: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          region: ${{ env.AWS_REGION }}
+      - name: Store private values and export only ARN references
+        env:
+          BIGDATA_API_KEY: ${{ secrets.BIGDATA_SECRET_ARN }}
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+        run: |
+          mkdir -p .deployment
+          python3 scripts/deployment_secrets.py sync > .deployment/secret-references.env
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-secrets-${{ inputs.environment }}
+          path: .deployment/secret-references.env
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+  build_backend:
+    name: Build backend image
+    needs: checks
+    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEPLOY_ENV: ${{ inputs.environment }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/aws-session
+        with:
+          role-arn: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          region: ${{ env.AWS_REGION }}
+      - uses: docker/setup-buildx-action@v3
+      - run: bash scripts/build_image.sh api
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-api-${{ inputs.environment }}
+          path: .deployment/api-image.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+  build_workers:
+    name: Build worker image
+    needs: checks
+    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEPLOY_ENV: ${{ inputs.environment }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/aws-session
+        with:
+          role-arn: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          region: ${{ env.AWS_REGION }}
+      - uses: docker/setup-buildx-action@v3
+      - run: bash scripts/build_image.sh worker
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-worker-${{ inputs.environment }}
+          path: .deployment/worker-image.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+  build_frontend:
+    name: Build frontend
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm --prefix frontend ci
+      - run: npm --prefix frontend run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build-${{ inputs.environment }}
+          path: frontend/dist/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+  infrastructure:
+    name: Provision infrastructure
+    needs: [secrets, build_backend, build_workers]
+    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      DEPLOY_ENV: ${{ inputs.environment }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/aws-session
+        with:
+          role-arn: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          region: ${{ env.AWS_REGION }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.15.7'
+          terraform_wrapper: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*-${{ inputs.environment }}
+          path: .deployment
+          merge-multiple: true
+      - name: Apply infrastructure once with state locking
+        env:
+          YFINANCE_SHARED_CACHE: ${{ vars.YFINANCE_SHARED_CACHE || 'false' }}
+        run: bash scripts/provision_infrastructure.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: infrastructure-${{ inputs.environment }}
+          path: .deployment/infrastructure.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+  backend:
+    name: Backend API / ${{ matrix.service }}
+    needs: infrastructure
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [projects, research, data, artifacts, activity, identity]
+    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEPLOY_ENV: ${{ inputs.environment }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/aws-session
+        with:
+          role-arn: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          region: ${{ env.AWS_REGION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: infrastructure-${{ inputs.environment }}
+          path: .deployment
+      - run: python3 scripts/release_components.py lambda api "${{ matrix.service }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: receipt-${{ matrix.service }}-${{ inputs.environment }}
+          path: .deployment/*-receipt.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+  realtime:
+    name: Realtime handler / ${{ matrix.service }}
+    needs: infrastructure
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [connections, publisher, reconciler]
+    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEPLOY_ENV: ${{ inputs.environment }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/aws-session
+        with:
+          role-arn: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          region: ${{ env.AWS_REGION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: infrastructure-${{ inputs.environment }}
+          path: .deployment
+      - run: python3 scripts/release_components.py lambda realtime "${{ matrix.service }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: receipt-${{ matrix.service }}-${{ inputs.environment }}
+          path: .deployment/*-receipt.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+  workers:
+    name: Research task / ${{ matrix.kind }}
+    needs: infrastructure
+    strategy:
+      fail-fast: false
+      matrix:
+        kind: [worker, runner]
+    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEPLOY_ENV: ${{ inputs.environment }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/aws-session
+        with:
+          role-arn: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          region: ${{ env.AWS_REGION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: infrastructure-${{ inputs.environment }}
+          path: .deployment
+      - run: python3 scripts/release_components.py task "${{ matrix.kind }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: receipt-${{ matrix.kind }}-${{ inputs.environment }}
+          path: .deployment/*-receipt.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+  research_workflow:
+    name: Release research workflow
+    needs: [infrastructure, workers]
+    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEPLOY_ENV: ${{ inputs.environment }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/aws-session
+        with:
+          role-arn: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          region: ${{ env.AWS_REGION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: infrastructure-${{ inputs.environment }}
+          path: .deployment
+      - uses: actions/download-artifact@v4
+        with:
+          name: receipt-worker-${{ inputs.environment }}
+          path: .deployment
+      - uses: actions/download-artifact@v4
+        with:
+          name: receipt-runner-${{ inputs.environment }}
+          path: .deployment
+      - run: python3 scripts/release_components.py workflow
+      - uses: actions/upload-artifact@v4
+        with:
+          name: receipt-workflow-${{ inputs.environment }}
+          path: .deployment/workflow-receipt.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+  alerts:
+    name: Configure alerts
+    needs: infrastructure
+    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEPLOY_ENV: ${{ inputs.environment }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/aws-session
+        with:
+          role-arn: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          region: ${{ env.AWS_REGION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: infrastructure-${{ inputs.environment }}
+          path: .deployment
+      - name: Configure private email recipient
+        env:
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+        run: python3 scripts/deployment_secrets.py alerts --topic-arn "$(python3 scripts/release_components.py output alerts_topic_arn)"
+  frontend:
+    name: Publish frontend
+    needs: [infrastructure, build_frontend, backend, realtime, research_workflow]
+    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEPLOY_ENV: ${{ inputs.environment }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/aws-session
+        with:
+          role-arn: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          region: ${{ env.AWS_REGION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: infrastructure-${{ inputs.environment }}
+          path: .deployment
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-build-${{ inputs.environment }}
+          path: frontend/dist
+      - run: bash scripts/publish_frontend.sh
+  verify:
+    name: Verify deployment
+    needs: [infrastructure, frontend, alerts]
+    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEPLOY_ENV: ${{ inputs.environment }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/aws-session
+        with:
+          role-arn: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          region: ${{ env.AWS_REGION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: infrastructure-${{ inputs.environment }}
+          path: .deployment
+      - run: bash scripts/verify_deployment.sh

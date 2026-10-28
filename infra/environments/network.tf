@@ -109,7 +109,7 @@ resource "aws_security_group" "endpoints" {
 }
 resource "aws_vpc_endpoint" "interfaces" {
 
-  for_each            = toset(["ecr.api", "ecr.dkr", "logs", "dynamodb"])
+  for_each            = toset(["ecr.api", "ecr.dkr", "logs"])
   vpc_id              = aws_vpc.main.id
   service_name        = "com.amazonaws.${var.region}.${each.key}"
   vpc_endpoint_type   = "Interface"
@@ -147,5 +147,20 @@ resource "aws_security_group" "runner" {
     protocol        = "tcp"
     prefix_list_ids = [aws_vpc_endpoint.s3.prefix_list_id]
   }
+  egress {
+    from_port       = 443
+    to_port         = 443
+    protocol        = "tcp"
+    prefix_list_ids = [aws_vpc_endpoint.dynamodb.prefix_list_id]
+  }
 
+}
+resource "aws_vpc_endpoint" "dynamodb" {
+  vpc_id            = aws_vpc.main.id
+  service_name      = "com.amazonaws.${var.region}.dynamodb"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids   = [aws_route_table.private.id]
+  tags = {
+    Name = "${local.prefix}-dynamodb-endpoint"
+  }
 }
