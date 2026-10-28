@@ -7,7 +7,14 @@ export interface Config {
 }
 export let config: Config = { apiUrl: "", local: true };
 let token = sessionStorage.getItem("jimmy_token") || "";
-export async function initialize() {
+export function hasSession() {
+  return Boolean(token);
+}
+let initialization: Promise<void> | undefined;
+export function initialize() {
+  return (initialization ??= initializeSession());
+}
+async function initializeSession() {
   const response = await fetch("/config.json", { cache: "no-store" });
   if (response.ok && response.headers.get("content-type")?.includes("json"))
     config = await response.json();
@@ -30,7 +37,10 @@ export async function initialize() {
       }),
     });
     if (!result.ok) throw Error("Sign-in failed");
-    token = (await result.json()).id_token;
+    const idToken = (await result.json()).id_token;
+    if (typeof idToken !== "string" || !idToken)
+      throw Error("Sign-in did not return an identity token. Please try again.");
+    token = idToken;
     sessionStorage.setItem("jimmy_token", token);
     sessionStorage.removeItem("oauth_verifier");
     sessionStorage.removeItem("oauth_state");
