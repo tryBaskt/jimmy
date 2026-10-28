@@ -12,7 +12,7 @@ dist/
 infra/terraform.tfvars
 build/
 *.egg-info/
-artifacts/
+/artifacts/
 
 *.tsbuildinfo
 infra/environments/deploy.tfplan
