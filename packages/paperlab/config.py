@@ -15,7 +15,7 @@ class Settings:
     issuer: str = ""
     audience: str = ""
     origin: str = "http://localhost:5173"
-    planner_model: str = "us.openai.gpt-6-astra"
+    planner_model: str = "us.moonshotai.kimi-k3"
     worker_model: str = "us.moonshotai.kimi-k3"
     bigdata_secret: str = ""
     websocket_endpoint: str = ""
@@ -37,7 +37,7 @@ class Settings:
             issuer=os.getenv("JWT_ISSUER", ""),
             audience=os.getenv("JWT_AUDIENCE", ""),
             origin=os.getenv("WEB_ORIGIN", "http://localhost:5173"),
-            planner_model=os.getenv("PLANNER_MODEL_ID", "us.openai.gpt-6-astra"),
+            planner_model=os.getenv("PLANNER_MODEL_ID", "us.moonshotai.kimi-k3"),
             worker_model=os.getenv("WORKER_MODEL_ID", "us.moonshotai.kimi-k3"),
             bigdata_secret=os.getenv("BIGDATA_SECRET_ARN", ""),
             websocket_endpoint=os.getenv("WEBSOCKET_MANAGEMENT_ENDPOINT", ""),

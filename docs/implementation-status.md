@@ -4,7 +4,7 @@ This PR implements the ground-up application and deployable infrastructure. The 
 
 | Capability | Status |
 | --- | --- |
-| Main claim and experiment-suite planning, page-grounded citations | Implemented through Astra on Bedrock; actual model evaluation requires enabled account access |
+| Main claim and experiment-suite planning, page-grounded citations | Implemented through Kimi K3 on Bedrock for all AI roles; actual model evaluation requires enabled account access |
 | Automatic planner-owned data validation and bounded substitute/replan loop | Implemented; connector and method capabilities constrain what can execute |
 | Price and document connectors | yfinance monthly adjusted-return derivation; Bigdata document search; private CSV numerical inputs |
 | Future connector onboarding | Protocol and registry; arbitrary external code/URLs are not accepted |
