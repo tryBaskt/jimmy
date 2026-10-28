@@ -363,3 +363,5 @@ Data-cache validation covers catalog hits without redundant internet retrieval, 
 - [S3 conditional writes for canonical object creation](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html)
 
 These references support service behavior, not the scientific validity of any experiment.
+
+Planner citation validation reports every ungrounded quotation with its PDF page, field path and exact-match candidate pages. The planner may make at most two citation-only repair calls; all repaired citations are revalidated against extracted text. Repairs cannot alter claims, experiments, dependencies, expected values or coverage. Attempts and diagnostics remain visible in activity events and agent artifacts; unresolved citations terminate planning.
