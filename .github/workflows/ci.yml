@@ -48,3 +48,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build deployable image
         run: docker build --target ${{ matrix.target }} --tag jimmy-ci-${{ matrix.target }} .
+      - name: Verify installed service and worker packages
+        run: >-
+          docker run --rm --entrypoint python -e PAPERLAB_ROOT=/tmp/jimmy-ci
+          jimmy-ci-${{ matrix.target }}
+          -c "from apis.app import app; import paperlab.workflow; import workers.replication.main; assert app.routes"
