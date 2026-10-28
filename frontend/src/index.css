@@ -1,6 +1,0 @@
-:root { font-family: Inter, system-ui, sans-serif; color: #24362e; background: #f6f5f0; font-synthesis: none; text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased; }
-* { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; }
-button { font: inherit; cursor: pointer; }
-button:disabled { cursor: wait; opacity: .6; }
-button:focus-visible { outline: 3px solid #a0c7af; outline-offset: 4px; }

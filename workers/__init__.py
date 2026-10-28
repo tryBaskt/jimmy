@@ -1,1 +1,1 @@
-"""Deployable background workers."""
+"""Execution entry points, separate from HTTP service code."""
