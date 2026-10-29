@@ -166,3 +166,20 @@ def test_missing_month_never_becomes_a_multi_month_return():
     frame = monthly_returns(prices, 'A')
     assert list(frame.date) == ['2020-04-30']
     assert frame['return'].iloc[0] == pytest.approx(0.1)
+
+
+def test_substitute_options_describe_monthly_data_without_rewriting_original(experiment):
+    original = experiment.model_copy(deep=True)
+    original.requirement.frequency = 'daily'
+    original.requirement.symbols = []
+    original.requirement.universe = UniverseDefinition(description='Historical NYSE', exchanges=['NYSE'])
+    frame = pd.DataFrame([{'date': d, 'security_id': s, 'return': 0.01}
+                          for d in pd.date_range('2020-01-31', '2020-06-30', freq='ME') for s in ['A', 'B']])
+    option = coverage(frame, original)['supported_options'][0]
+    assert option['requirement']['frequency'] == 'monthly'
+    assert option['requirement']['universe']['historical_membership_required'] is False
+    assert original.requirement.frequency == 'daily'
+    assert original.requirement.universe.historical_membership_required is True
+    modified = original.model_copy(deep=True)
+    modified.requirement = type(original.requirement).model_validate(option['requirement'])
+    validate_selection(frame, modified)
