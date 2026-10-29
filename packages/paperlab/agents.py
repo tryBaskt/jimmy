@@ -3,7 +3,7 @@
 import json
 import re
 from pydantic import Field
-from paperlab.models import Citation, Contract, PaperPlan, Selection, Extensions
+from paperlab.models import Citation, Contract, PaperPlan, Selection, Extensions, DataReplan
 from paperlab.storage import artifact
 
 
@@ -127,6 +127,12 @@ class BedrockAgents:
             "Citations must quote actual page text. Expected values must include a matching source "
             "quote, units converted to decimals, and a justified numerical tolerance. "
             "Do not invent a universe of tickers; leave symbols empty if not specified. "
+            "Extract the universe definition (exchanges, country, security type, historical membership) "
+            "into requirement.universe; names such as NYSE/AMEX are sufficient, no ticker list required. "
+            "Include a useful data search query. Regression/decomposition, beta/size strata, earnings "
+            "events, calendar-month conditioning and event-time analyses are unsupported templates; "
+            "keep them visible with method=unsupported. return_series means exactly one explicitly "
+            "identified supplied return series, not any test using stock returns. "
             "Monthly skip cannot represent a one-week gap; disclose this limitation. "
             "Dependencies must refer to experiment IDs. Citation page numbers MUST use the supplied "
             "page field (1-based PDF pages), not printed journal page numbers. Copy quotations verbatim.",
@@ -172,9 +178,25 @@ class BedrockAgents:
             "or uploaded returns CSV, not documents. Any change in universe/period/method or "
             "unknown historical membership requires caveats and comparison_eligible=false. "
             "Preserve experiment ID and its original claim. If no viable numerical data exists, "
-            "select null and explain. Do not claim exact replication without evidence.",
+            "select null and explain. For a numerical choice use a quality.supported_options requirement "
+            "with complete warmup coverage. Set return_basis from the profile; raw price returns must "
+            "be explicitly modified, never treated as dividend-adjusted total returns. Do not change "
+            "method, quantiles or holding/formation settings to force data acceptance. "
+            "Do not claim exact replication without evidence.",
             {"experiment": experiment, "candidates": candidates, "attempt": attempt},
             Selection,
+        )
+
+    def replan_data(self, experiment, diagnostics, attempt):
+        return self.call(
+            "Data discovery returned no usable candidates. Propose up to three bounded revised data "
+            "requests using the connector diagnostics: resolve explicit exchange universes, provide "
+            "search queries, or change dates with disclosed caveats. Never invent ticker/entity IDs, "
+            "historical membership or results. Preserve experiment ID, claim, method and numerical "
+            "settings. Preserve published expected outputs. Return no alternatives if the required "
+            "method or data cannot be represented. Select by suitability, never return performance.",
+            {"experiment": experiment, "diagnostics": diagnostics, "attempt": attempt},
+            DataReplan,
         )
 
     def extend(self, executions, plan):

@@ -61,6 +61,8 @@ type Result = {
   evaluation?: Record<string, unknown>;
   result?: string;
   rationale?: string;
+  coverage?: { securities: number; start: string; end: string; missing_requested_symbols: string[] };
+  universe?: { observed_members: number; selected_members: number; historical_membership: string };
 };
 type Run = {
   id: string;
@@ -760,6 +762,17 @@ function App() {
                         <span className="pill">{x.mode || x.status}</span>
                       </div>
                       <p>{x.rationale || x.reason}</p>
+                      {x.coverage && (
+                        <p>Dataset: {x.coverage.securities} securities · {x.coverage.start} to {x.coverage.end}.
+                          {x.coverage.missing_requested_symbols.length > 0 &&
+                            ` ${x.coverage.missing_requested_symbols.length} requested identifiers missing.`}
+                        </p>
+                      )}
+                      {x.universe && (
+                        <p>Universe: {x.universe.selected_members} sampled from {x.universe.observed_members} observed identifiers.
+                          Historical exchange membership: {x.universe.historical_membership}.
+                        </p>
+                      )}
                       {x.experiment.caveats?.length > 0 && (
                         <div className="caveat">
                           <strong>Modifications & caveats</strong>
@@ -784,6 +797,17 @@ function App() {
                         "fetch_started",
                         "dataset_committed",
                         "data_selected",
+                        "catalog_candidates",
+                        "universe_resolution_started",
+                        "universe_resolved",
+                        "data_capability_gap",
+                        "data_discovery",
+                        "data_discovery_issue",
+                        "data_acquisition_failed",
+                        "data_coverage",
+                        "data_replanned",
+                        "data_selection_rejected",
+                        "data_search_exhausted",
                       ].includes(e.kind),
                     )
                     .map((e) => (

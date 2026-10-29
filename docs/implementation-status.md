@@ -6,7 +6,7 @@ This PR implements the ground-up application and deployable infrastructure. The 
 | --- | --- |
 | Main claim and experiment-suite planning, page-grounded citations | Implemented through Kimi K3 on Bedrock for all AI roles; actual model evaluation requires enabled account access |
 | Automatic planner-owned data validation and bounded substitute/replan loop | Implemented; connector and method capabilities constrain what can execute |
-| Price and document connectors | yfinance monthly adjusted-return derivation; Bigdata document search; private CSV numerical inputs |
+| Price and document connectors | yfinance adjusted monthly returns; remote Bigdata MCP screening/search with runtime schema validation; cached exchange-universe snapshots, original/later-period candidates, coverage checks and bounded empty-discovery replanning; private CSV inputs |
 | Future connector onboarding | Protocol and registry; arbitrary external code/URLs are not accepted |
 | Catalog-first exact-request reuse, byte deduplication, acquisition lease fencing | Implemented with scoped reuse; cross-user Yahoo reuse opt-in |
 | Compatible-superset catalog matching | Implemented with explicit slice filters and entitlement/semantic matching |
