@@ -105,3 +105,34 @@ def test_whitespace_only_quote_cannot_ground(experiment):
     with pytest.raises(CitationValidationError) as error:
         verify_citations(plan, [{'page': 1, 'text': 'winners'}])
     assert error.value.issues[0]['matching_pdf_pages'] == []
+
+
+def test_invalid_json_receives_bounded_schema_correction_without_reasoning(store):
+    agent = BedrockAgents.__new__(BedrockAgents)
+    agent.settings, agent.store, agent.project, agent.run, agent.calls = Settings(), store, 'p', 'r', 0
+    events = []
+    agent.notify = lambda kind, summary, detail: events.append((kind, detail))
+    def reply(text):
+        return {'body': BytesIO(json.dumps({'choices': [{'finish_reason': 'stop', 'message': {
+            'content': text, 'reasoning_content': 'DO_NOT_RECORD_REASONING'}}]}).encode())}
+    agent.client = Mock()
+    agent.client.invoke_model.side_effect = [reply('{}'), reply('{"answer":"fixed"}')]
+    assert agent.call('test', {}, Output).answer == 'fixed'
+    rejected = next(detail for kind, detail in events if kind == 'agent_validation_failed')
+    body = store.blob_get(rejected['artifact'])
+    assert b'DO_NOT_RECORD_REASONING' not in body
+    assert 'input' not in rejected['issues'][0]
+    assert agent.calls == 2
+
+
+def test_schema_repair_budget_terminates_with_typed_error(store):
+    from paperlab.agents import AgentOutputError
+    agent = BedrockAgents.__new__(BedrockAgents)
+    agent.settings, agent.store, agent.project, agent.run, agent.calls = Settings(), store, 'p', 'r', 0
+    agent.notify = Mock()
+    agent.client = Mock()
+    agent.client.invoke_model.side_effect = [{'body': BytesIO(json.dumps({'choices': [
+        {'finish_reason': 'stop', 'message': {'content': '{}'}}]}).encode())} for _ in range(3)]
+    with pytest.raises(AgentOutputError, match='two repair'):
+        agent.call('test', {}, Output)
+    assert agent.calls == 3
