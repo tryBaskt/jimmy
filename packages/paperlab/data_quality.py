@@ -28,7 +28,15 @@ def coverage(frame, experiment):
             continue
         if experiment.method == 'return_series' and (len(original.symbols) != 1 or len(eligible) != 1):
             continue
-        requirement = original.model_copy(update={'symbols': eligible, 'start': start.date(), 'end': end.date()})
+        requirement = original.model_copy(update={'symbols': eligible, 'start': start.date(),
+                                                  'end': end.date(), 'frequency': 'monthly'})
+        if original.universe and original.universe.historical_membership_required:
+            requirement.universe = original.universe.model_copy(update={
+                'historical_membership_required': False,
+                'description': 'Modified provider-backed sample; historical exchange membership unverified'})
+        if not original.symbols or original.frequency != 'monthly':
+            requirement.description = ('Modified monthly return sample with complete observed security-month '
+                                       'coverage; original universe, source and timing caveats remain attached')
         options.append({'name': label, 'requirement': requirement.model_dump(mode='json'),
                         'eligible_securities': len(eligible), 'warmup_months': warmup,
                         'selection_basis': 'complete date coverage only; no return-performance selection'})
@@ -41,6 +49,8 @@ def coverage(frame, experiment):
 
 
 def validate_selection(frame, experiment):
+    if experiment.requirement.frequency != 'monthly':
+        raise ValueError('Monthly numerical inputs require an explicitly monthly experiment requirement')
     quality = coverage(frame, experiment)
     matching = [o for o in quality['supported_options'] if o['name'] == 'requested_period'
                 and set(o['requirement']['symbols']) == set(experiment.requirement.symbols)
