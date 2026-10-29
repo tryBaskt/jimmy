@@ -10,7 +10,7 @@ import time
 import uuid
 from pydantic import Field
 from pypdf import PdfReader
-from paperlab.agents import BedrockAgents, verify_citations
+from paperlab.agents import AgentOutputError, BedrockAgents, verify_citations
 from paperlab.catalog import Catalog, AcquisitionPending
 from paperlab.connectors import Candidate, Registry
 from paperlab.connectors.bigdata import BigdataConnector
@@ -531,7 +531,13 @@ class Workflow:
                 "extrapolation_unavailable", "No usable parent execution; extrapolation stage recorded"
             )
             return
-        extensions = self.agent().extend(usable, self.load("plan"))
+        try:
+            extensions = self.agent().extend(usable, self.load("plan"))
+        except AgentOutputError as error:
+            self.save("extensions", {"experiments": [], "exclusions": [str(error)]})
+            self.notify("extrapolation_terminated", "Extrapolation planning ended after invalid model outputs",
+                        {"reason": str(error), "paper_results_preserved": True})
+            return
         parents = {x["experiment"]["id"]: x for x in usable}
         ids = set()
         for ext in extensions.experiments:

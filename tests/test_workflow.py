@@ -164,3 +164,19 @@ def test_full_experiment_and_child_pipeline(settings, store, experiment):
     assert result["extrapolated_experiments"][0]["status"] == "completed"
     assert result["extrapolated_experiments"][0]["parent"] == "momentum"
     assert store.get("project#p", "run#r")[0]["status"] == "completed"
+
+
+def test_extrapolation_schema_exhaustion_preserves_paper_results(settings, store, experiment):
+    from paperlab.agents import AgentOutputError
+    class InvalidExtensions:
+        def extend(self, *args):
+            raise AgentOutputError('Model output failed schema validation after two repair attempts')
+    seed(store)
+    w = Workflow(settings, store, 'p', 'r', agents=InvalidExtensions())
+    results = [{'experiment': experiment.model_dump(mode='json'), 'status': 'completed'}]
+    w.save('compared', results)
+    w.save('plan', {'main_claim': 'Momentum'})
+    w.extend()
+    assert w.load('compared') == results
+    assert w.load('extensions')['experiments'] == []
+    assert 'two repair' in w.load('extensions')['exclusions'][0]
