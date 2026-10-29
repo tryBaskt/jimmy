@@ -32,7 +32,12 @@ class Registry:
         found, errors = [], []
         for connector in self.connectors.values():
             try:
-                found.extend(connector.discover(requirement, scope))
+                candidates = connector.discover(requirement, scope)
+                found.extend(candidates)
+                if not candidates:
+                    errors.append({"connector": connector.name, "code": "no_direct_candidates",
+                                   "kind": requirement.kind, "symbols_supplied": bool(requirement.symbols),
+                                   "query_supplied": bool(requirement.query)})
             except (ValueError, RuntimeError) as exc:
                 errors.append({"connector": connector.name, "error": type(exc).__name__})
         return found, errors

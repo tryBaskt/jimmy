@@ -87,7 +87,7 @@ def test_full_experiment_and_child_pipeline(settings, store, experiment):
 
     seed(store)
     rows = []
-    for i, date in enumerate(pd.date_range("2020-01-31", periods=10, freq="ME")):
+    for i, date in enumerate(pd.date_range("2019-12-31", periods=11, freq="ME")):
         rows.extend(
             [
                 {"date": str(date.date()), "security_id": "A", "return": 0.03 + i * 0.001},

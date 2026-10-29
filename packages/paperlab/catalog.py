@@ -14,6 +14,31 @@ class Catalog:
     def __init__(self, store, notify=lambda *_: None):
         self.store, self.notify = store, notify
 
+    def find(self, requirement, authorized_scopes):
+        from paperlab.connectors import Candidate
+        from paperlab.universe import definition
+
+        found = []
+        universe = definition(requirement)
+        for scope in sorted(authorized_scopes):
+            for _, entry in self.store.query(f"catalog#{scope}", "version#", limit=200):
+                candidate = Candidate(**entry["candidate"])
+                requested = candidate.request
+                if candidate.scope != scope or candidate.kind != "stock_returns":
+                    continue
+                if requirement.kind not in {"prices", "returns"}:
+                    continue
+                if requirement.symbols and not set(requirement.symbols) <= set(requested.get("symbols", [])):
+                    continue
+                if not requirement.symbols and (not universe or not candidate.metadata.get("universe")):
+                    continue
+                if universe and candidate.metadata.get("universe", {}).get("dataset", {}).get(
+                    "candidate", {}
+                ).get("request", {}).get("exchanges") != sorted(set(e.upper() for e in universe.exchanges)):
+                    continue
+                found.append(candidate)
+        return found[:8]
+
     def acquire(self, candidate, fetch, *, max_age=86400):
         identity = digest(
             {"connector": candidate.connector, "request": candidate.request, "scope": candidate.scope}

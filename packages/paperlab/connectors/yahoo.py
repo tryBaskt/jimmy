@@ -1,10 +1,12 @@
 """Yahoo adjusted-price retrieval. Historical membership is never inferred."""
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 import re
 import pandas as pd
 from paperlab.connectors import Candidate
 from paperlab.storage import digest
+from paperlab.connectors.prices import monthly_returns, encode_frames
 
 
 class YahooConnector:
@@ -46,48 +48,35 @@ class YahooConnector:
     def fetch(self, candidate):
         import yfinance as yf
 
-        frames = []
         request = candidate.request
         start = pd.Timestamp(request["start"]) - pd.DateOffset(months=84)
         end = pd.Timestamp(request["end"]) + timedelta(days=1)
-        for symbol in request["symbols"]:
-            prices = yf.Ticker(symbol).history(
-                start=start.date(),
-                end=end.date(),
-                interval="1d",
-                auto_adjust=False,
-                actions=True,
-                repair=False,
-                raise_errors=True,
-            )
-            if prices.empty or "Adj Close" not in prices:
-                continue
-            index = prices.index.tz_localize(None) if prices.index.tz is not None else prices.index
-            series = pd.Series(prices["Adj Close"].to_numpy(), index=index).resample("ME").last()
-            # No forward filling across missing months.
-            returns = series.pct_change(fill_method=None)
-            frames.append(
-                pd.DataFrame(
-                    {
-                        "date": returns.index.strftime("%Y-%m-%d"),
-                        "security_id": symbol,
-                        "return": returns.values,
-                    }
+
+        def one(symbol):
+            try:
+                prices = yf.Ticker(symbol).history(
+                    start=start.date(), end=end.date(), interval="1d", auto_adjust=False,
+                    actions=True, repair=False, raise_errors=True, timeout=15,
                 )
-            )
-        if not frames:
-            raise ValueError("No adjusted price observations available")
-        data = pd.concat(frames).dropna().sort_values(["date", "security_id"])
-        body = data.to_csv(index=False, float_format="%.12g").encode()
+                if prices.empty or "Adj Close" not in prices:
+                    return None, {"symbol": symbol, "code": "no_adjusted_prices"}
+                index = prices.index.tz_localize(None) if prices.index.tz is not None else prices.index
+                series = pd.Series(prices["Adj Close"].to_numpy(), index=index)
+                return monthly_returns(series, symbol), None
+            except Exception as error:
+                # Provider error bodies are not returned to the planner or activity stream.
+                return None, {"symbol": symbol, "code": type(error).__name__}
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            outcomes = list(pool.map(one, request["symbols"]))
+        body, data = encode_frames([frame for frame, error in outcomes if frame is not None])
         return body, {
-            "source": "https://finance.yahoo.com/",
-            "provider": self.name,
-            "frequency": "monthly",
-            "units": "decimal_total_return_proxy",
-            "rows": len(data),
-            "start": data.date.min(),
-            "end": data.date.max(),
-            "symbols": request["symbols"],
-            "adjustment": request["adjustment"],
-            "availability": "historical_vintage_unknown",
+            "source": "https://finance.yahoo.com/", "provider": self.name,
+            "frequency": "monthly", "units": "decimal_total_return_proxy",
+            "return_basis": "total_return", "rows": len(data),
+            "start": data.date.min(), "end": data.date.max(),
+            "requested_symbols": request["symbols"],
+            "returned_symbols": sorted(data.security_id.unique()),
+            "failures": [error for _, error in outcomes if error],
+            "adjustment": request["adjustment"], "availability": "historical_vintage_unknown",
         }

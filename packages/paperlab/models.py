@@ -14,6 +14,14 @@ class Citation(Contract):
     quote: str = Field(min_length=1, max_length=3000)
 
 
+class UniverseDefinition(Contract):
+    description: str
+    exchanges: list[str] = Field(default_factory=list, max_length=10)
+    country: str = ""
+    security_type: Literal["common_stock", "unspecified"] = "common_stock"
+    historical_membership_required: bool = True
+
+
 class Requirement(Contract):
     kind: Literal["prices", "returns", "documents", "fundamentals"]
     description: str
@@ -23,6 +31,8 @@ class Requirement(Contract):
     frequency: Literal["daily", "monthly"] = "monthly"
     query: str = ""
     vintage: str = "unspecified"
+    universe: UniverseDefinition | None = None
+    return_basis: Literal["total_return", "price_return"] = "total_return"
 
     @model_validator(mode="after")
     def dates(self):
@@ -94,6 +104,11 @@ class Selection(Contract):
     modified_experiment: Experiment | None
     caveats: list[str]
     comparison_eligible: bool
+
+
+class DataReplan(Contract):
+    alternatives: list[Experiment] = Field(default_factory=list, max_length=3)
+    rationale: str
 
 
 class Extension(Contract):

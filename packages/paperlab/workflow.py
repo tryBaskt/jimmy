@@ -15,6 +15,9 @@ from paperlab.catalog import Catalog, AcquisitionPending
 from paperlab.connectors import Candidate, Registry
 from paperlab.connectors.bigdata import BigdataConnector
 from paperlab.connectors.yahoo import YahooConnector
+from paperlab.connectors.bigdata_mcp import BigdataMCP
+from paperlab.data_discovery import DataDiscovery
+from paperlab.data_quality import coverage, validate_selection
 from paperlab.models import Contract, Experiment, PaperPlan
 from paperlab.numerics import execute, compare, validate_returns, TEMPLATE_VERSION
 from paperlab.storage import Conflict, artifact, digest, emit
@@ -57,10 +60,11 @@ class Workflow:
             if os.getenv("YFINANCE_SHARED_CACHE") == "true"
             else f"project:{project}:yfinance"
         )
+        mcp = BigdataMCP(os.getenv("BIGDATA_API_KEY", ""), self.notify)
         self.registry = registry or Registry(
             [
                 YahooConnector(yahoo_scope),
-                BigdataConnector(os.getenv("BIGDATA_API_KEY", ""), f"project:{project}:bigdata"),
+                BigdataConnector(os.getenv("BIGDATA_API_KEY", ""), f"project:{project}:bigdata", mcp),
             ]
         )
 
@@ -222,8 +226,11 @@ class Workflow:
             current = original
             seen = set()
             candidates_seen = []
+            diagnostics = []
             for attempt in range(self.settings.max_replans):
-                candidates, errors = self.registry.discover(current.requirement, self.project)
+                discover = DataDiscovery(self.store, self.registry,
+                                         lambda k, s, d: self.notify(k, s, d, original.id))
+                candidates, errors = discover.discover(current, self.project)
                 candidates = [c for c in candidates if c.id not in seen][:4]
                 # Private uploaded numerical data are explicit candidates, never promoted to global scope.
                 if attempt == 0:
@@ -242,8 +249,15 @@ class Workflow:
                                     ],
                                 )
                             )
+                self.notify("data_discovery", "Data discovery attempt completed",
+                            {"attempt": attempt + 1, "candidates": len(candidates), "issues": errors}, original.id)
+                diagnostics.extend(errors)
                 if not candidates:
-                    break
+                    alternatives = self.replan_missing_data(current, diagnostics, attempt, original)
+                    if not alternatives:
+                        break
+                    current = alternatives[0]
+                    continue
                 profiles = []
                 for candidate in candidates[:5]:
                     seen.add(candidate.id)
@@ -279,22 +293,26 @@ class Workflow:
                         profile = {"candidate_id": candidate.id, **asdict(candidate), "dataset": dataset}
                         if candidate.kind == "stock_returns":
                             frame = validate_returns(self.store.blob_get(dataset["key"]))
-                            profile["quality"] = {
-                                "rows": len(frame),
-                                "securities": frame.security_id.nunique(),
-                                "start": str(frame.date.min().date()),
-                                "end": str(frame.date.max().date()),
-                                "frequency": "monthly",
-                                "missing_held_returns": "checked at execution",
-                            }
+                            profile["quality"] = coverage(frame, current)
+                            profile["return_basis"] = dataset["metadata"].get("return_basis", "total_return")
+                            self.notify("data_coverage", "Numerical dataset coverage measured",
+                                        {"candidate_id": candidate.id, **profile["quality"]}, original.id)
                         profiles.append(profile)
                     except AcquisitionPending:
                         raise
                     except (ValueError, OSError, RuntimeError) as exc:
-                        errors.append({"candidate_id": candidate.id, "error": type(exc).__name__})
+                        error = {"candidate_id": candidate.id, "connector": candidate.connector,
+                                 "code": type(exc).__name__, "message": str(exc)[:240]}
+                        errors.append(error)
+                        self.notify("data_acquisition_failed", "Dataset acquisition unavailable", error, original.id)
                 candidates_seen.extend(profiles)
+                diagnostics.extend(errors)
                 if not profiles:
-                    break
+                    alternatives = self.replan_missing_data(current, diagnostics, attempt, original)
+                    if not alternatives:
+                        break
+                    current = alternatives[0]
+                    continue
                 selection = self.agent().select(current.model_dump(mode="json"), profiles, attempt)
                 self.save(
                     f"selection-{original.id}-{attempt}",
@@ -303,11 +321,21 @@ class Workflow:
                 chosen = next((p for p in profiles if p["candidate_id"] == selection.candidate_id), None)
                 if chosen and chosen["kind"] == "stock_returns":
                     updated = selection.modified_experiment or current
-                    if updated.id != original.id or updated.claim != original.claim:
-                        raise ValueError("Replanning cannot replace the paper experiment's identity or claim")
+                    self.validate_data_replan(updated, original)
+                    frame = validate_returns(self.store.blob_get(chosen["dataset"]["key"]))
+                    try:
+                        validate_selection(frame, updated)
+                        if updated.requirement.return_basis != chosen.get("return_basis", "total_return"):
+                            raise ValueError("Selected return basis differs from provider observations")
+                    except ValueError as exc:
+                        issue = {"code": "selection_coverage_mismatch", "message": str(exc)}
+                        diagnostics.append(issue)
+                        self.notify("data_selection_rejected", "Planner choice failed deterministic coverage checks",
+                                    issue, original.id)
+                        continue
                     modified = updated.model_dump(mode="json") != original.model_dump(mode="json")
                     # Yahoo is always qualified; no agent can override its historical universe limitations.
-                    caveats = list(dict.fromkeys(original.caveats + selection.caveats + chosen["caveats"]))
+                    caveats = list(dict.fromkeys(original.caveats + updated.caveats + selection.caveats + chosen["caveats"]))
                     qualified = modified or bool(caveats) or chosen["connector"] in {"yfinance", "upload"}
                     # Preserve original published targets; data substitutions cannot rewrite paper evidence.
                     updated.expected = original.expected
@@ -323,6 +351,8 @@ class Workflow:
                         "comparison_eligible": selection.comparison_eligible and not qualified,
                         "rationale": selection.rationale,
                         "parent": (parents or {}).get(original.id),
+                        "coverage": chosen.get("quality"),
+                        "universe": chosen.get("metadata", {}).get("universe"),
                     }
                     self.notify("data_selected", selection.rationale, selected, original.id)
                     break
@@ -337,11 +367,38 @@ class Workflow:
                     "experiment": original.model_dump(mode="json"),
                     "status": "blocked",
                     "group": group,
-                    "reason": "No defensible executable numerical dataset within search budget",
+                    "reason": "No usable numerical dataset after recorded discovery and suitability checks",
                     "candidates_considered": len(candidates_seen),
+                    "discovery_diagnostics": diagnostics,
                 }
             )
         self.save(output, prepared)
+
+    @staticmethod
+    def validate_data_replan(updated, original):
+        fields = ["id", "claim", "central", "dependencies", "method", "formation_months",
+                  "holding_months", "skip_months", "quantiles"]
+        if any(getattr(updated, key) != getattr(original, key) for key in fields):
+            raise ValueError("Data replanning cannot change experiment identity, claim or numerical method")
+
+    def replan_missing_data(self, current, diagnostics, attempt, original):
+        self.save(f"discovery-{original.id}-{attempt}", {"issues": diagnostics, "empty_candidates": True})
+        if attempt + 1 >= self.settings.max_replans:
+            self.notify("data_search_exhausted", "Bounded data search ended with unresolved gaps",
+                        {"issues": diagnostics}, original.id)
+            return []
+        agent = self.agent()
+        if not hasattr(agent, "replan_data"):
+            return []
+        replanned = agent.replan_data(current.model_dump(mode="json"), diagnostics, attempt)
+        self.save(f"data-replan-{original.id}-{attempt}", replanned.model_dump(mode="json"))
+        self.notify("data_replanned", replanned.rationale, replanned.model_dump(mode="json"), original.id)
+        for alternative in replanned.alternatives:
+            self.validate_data_replan(alternative, original)
+            if not set(alternative.requirement.symbols) <= set(original.requirement.symbols):
+                raise ValueError("Replanning cannot invent security identifiers; use provider universe resolution")
+            alternative.expected, alternative.citations = original.expected, original.citations
+        return replanned.alternatives
 
     def freeze_group(self, prepared_name, frozen_name):
         prepared = self.load(prepared_name) or []

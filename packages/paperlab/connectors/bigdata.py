@@ -1,22 +1,23 @@
 """Bigdata licensed document search, deliberately distinct from numerical datasets."""
 
 from datetime import timedelta
-import httpx
 from paperlab.connectors import Candidate
 from paperlab.storage import digest, encode
+from paperlab.connectors.bigdata_mcp import BigdataMCP
 
 
 class BigdataConnector:
     name = "bigdata"
 
-    def __init__(self, api_key, entitlement_scope):
+    def __init__(self, api_key, entitlement_scope, mcp=None):
         self.api_key, self.scope = api_key, entitlement_scope
+        self.mcp = mcp or BigdataMCP(api_key)
 
     def discover(self, requirement, scope):
-        if not self.api_key or not requirement.query:
+        if not self.api_key or requirement.kind not in {"documents", "fundamentals"}:
             return []
         base = {"start": str(requirement.start), "end": str(requirement.end)}
-        queries = list(dict.fromkeys([requirement.query, requirement.description]))[:2]
+        queries = list(dict.fromkeys([requirement.query or requirement.description, requirement.description]))[:2]
         return [
             Candidate(
                 id=digest({**base, "query": query}),
@@ -47,20 +48,10 @@ class BigdataConnector:
                 },
             },
         }
-        with httpx.Client(timeout=45, follow_redirects=False) as client:
-            response = client.post(
-                "https://api.bigdata.com/v1/search", json=payload, headers={"X-API-KEY": self.api_key}
-            )
-            if response.status_code != 200:
-                # Do not expose request headers, provider response bodies, or credentials.
-                raise ValueError(f"Bigdata request failed with HTTP {response.status_code}")
-            data = response.json()
+        data = self.mcp.call('bigdata_search', {'request': payload})
         docs = data.get("results", [])
         return encode(data).encode(), {
-            "provider": self.name,
-            "source": "https://api.bigdata.com/v1/search",
-            "kind": "documents",
-            "documents": len(docs),
-            "request": r,
-            "entitlement_scope": self.scope,
+            "provider": self.name, "transport": "mcp", "tool": "bigdata_search",
+            "source": "https://mcp.bigdata.com/", "kind": "documents",
+            "documents": len(docs), "request": r, "entitlement_scope": self.scope,
         }
