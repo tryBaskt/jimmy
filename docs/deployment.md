@@ -54,20 +54,26 @@ so branch protection is what enforces merging as the only path to deployment.
 
 ## Job ownership
 
-All deployment commands live in `.github/workflows/deploy.yml` and reusable actions.
+Deployment orchestration lives in `.github/workflows/deploy.yml`,
+`.github/workflows/deploy-workflow.yml`, and reusable actions.
 Terraform defines resources; `workflows.json` is the registry shared by CI and deployment.
 
 | Job | Owns | State key |
 | --- | --- | --- |
 | `provision-infrastructure` | State bootstrap, gateway, hosting, log encryption and each workflow's ECR repositories | `foundation/terraform.tfstate` |
 | `provision-auth` | Cognito pool, client, domain and JWT authorizer | `auth/terraform.tfstate` |
-| `provision-workflows` matrix | One named job per registered workflow: API image/Lambda, runtime image/AgentCore, routes, roles and logs | `workflows/<id>/terraform.tfstate` |
+| `provision-workflows` matrix → `publish-images` | Build and publish the selected workflow's API and runtime images | None |
+| `provision-workflows` matrix → `provision-workflow` | Provision its Lambda, AgentCore runtime, routes, roles and logs after publishing succeeds | `workflows/<id>/terraform.tfstate` |
 | `provision-frontend` | Web build, environment configuration, publication and per-workflow smoke checks | None |
 
 Each workflow owns a separate API Lambda and AgentCore runtime. There is no common
 API Lambda, central route registry in Python, or per-workflow Terraform root to copy.
 `infra/workflows` calls `infra/modules/workflow` once per isolated state. Matrix jobs
-run in parallel after shared infrastructure and auth, and frontend waits for all to succeed.
+call `.github/workflows/deploy-workflow.yml` after shared infrastructure and auth.
+Each invocation has its own publish → provision dependency, so a failed image build
+blocks only that workflow's provisioning. Frontend waits for all workflows to succeed.
+Provisioning checks both images in ECR and derives their URIs from foundation metadata
+and the immutable commit tag; no image URI passes through cross-job outputs.
 All applies use state locking. Same-branch deployments queue rather than cancelling applies.
 
 The catalog action validates services before any infrastructure provisioning. Foundation
@@ -143,3 +149,12 @@ GitHub suppresses outputs containing secrets, including bucket names containing 
 secret account ID, which otherwise leaves downstream backend configuration empty.
 The jobs validate the bucket name before initialization. Foundation/auth resource
 metadata continues to pass through the existing JSON artifacts.
+
+## AgentCore creation dependencies
+
+`CreateAgentRuntime` also authorizes automatic `DEFAULT` endpoint creation and
+resource tagging. The deployment policy includes `CreateAgentRuntimeEndpoint` and
+`TagResource` on runtime resources in the configured account and region, requiring
+Jimmy and matching-environment request tags. The create check uses `runtime/*`
+before a runtime ID exists. Later runtime management remains scoped to the workflow
+name prefix. This does not grant runtime invocation or resource deletion.

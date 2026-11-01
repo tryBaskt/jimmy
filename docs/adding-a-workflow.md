@@ -78,7 +78,8 @@ No workflow-specific GitHub job or Terraform root is required. The registry driv
 
 1. CI test matrices, installing each service independently.
 2. ECR API/runtime repositories in the foundation stack.
-3. A separate deployment matrix job for each workflow.
+3. A separate reusable deployment invocation for each workflow, with image-publishing
+   and provisioning jobs.
 4. The reusable `infra/modules/workflow` module, called through `infra/workflows`.
 5. State isolation at `workflows/<id>/terraform.tfstate` in the environment's state bucket.
 6. Frontend post-deployment health/authentication checks for every workflow.

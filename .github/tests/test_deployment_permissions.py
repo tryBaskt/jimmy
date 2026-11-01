@@ -46,3 +46,19 @@ def test_cognito_refresh_can_read_mfa_configuration_only_for_tagged_environment_
     assert permissions['Condition'] == {'StringEquals': {
         'aws:ResourceTag/Application': 'jimmy', 'aws:ResourceTag/Environment': environment,
     }}
+
+
+@pytest.mark.parametrize('environment', ['dev', 'prod'])
+def test_agentcore_creation_includes_default_endpoint_and_tag_dependencies(environment):
+    permissions = deployment_permissions(environment)
+    runtime = next(s for s in permissions if s['Sid'] == 'CreateRuntimes')
+    endpoint = next(s for s in permissions if s['Sid'] == 'CreateRuntimeEndpointAndTags')
+    assert 'bedrock-agentcore:CreateAgentRuntime' in runtime['Action']
+    assert set(endpoint['Action']) == {
+        'bedrock-agentcore:CreateAgentRuntimeEndpoint', 'bedrock-agentcore:TagResource',
+    }
+    # The service authorizes auto-creation on runtime/* before the ID exists.
+    assert endpoint['Resource'] == ['arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/*']
+    assert endpoint['Condition'] == runtime['Condition'] == {'StringEquals': {
+        'aws:RequestTag/Application': 'jimmy', 'aws:RequestTag/Environment': environment,
+    }}
