@@ -48,7 +48,9 @@
         "s3:ListBucket*",
         "s3:GetEncryptionConfiguration",
         "s3:PutEncryptionConfiguration",
-        "s3:GetAccelerateConfiguration"
+        "s3:GetAccelerateConfiguration",
+        "s3:GetLifecycleConfiguration",
+        "s3:GetReplicationConfiguration"
       ],
       "Resource": [
         "arn:aws:s3:::jimmy-${environment}-state-${account_id}",
