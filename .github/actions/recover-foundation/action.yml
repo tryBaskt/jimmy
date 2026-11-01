@@ -1,0 +1,36 @@
+name: Recover incomplete dev foundation bucket
+description: Clear the verified historical bucket-create taint without replacing the bucket.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        # One-time recovery of the failed initial create. Do not clear arbitrary taints.
+        test "$GITHUB_REF" = refs/heads/dev || exit 0
+        [[ "$AWS_ACCOUNT_ID" =~ ^[0-9]{12}$ ]]
+        test "$STATE_BUCKET" = "jimmy-dev-state-$AWS_ACCOUNT_ID"
+        state_file=$(mktemp)
+        error_file=$(mktemp)
+        trap 'rm -f "$state_file" "$error_file"' EXIT
+        if ! aws s3api head-object --bucket "$STATE_BUCKET" --key foundation/terraform.tfstate --expected-bucket-owner "$AWS_ACCOUNT_ID" > /dev/null 2>"$error_file"; then
+          error=$(<"$error_file")
+          if [[ "$error" == *"(404)"* || "$error" == *"NoSuchKey"* ]]; then
+            exit 0
+          fi
+          cat "$error_file" >&2
+          exit 1
+        fi
+        terraform -chdir=infra/foundation state pull > "$state_file"
+        bucket="jimmy-dev-web-$AWS_ACCOUNT_ID"
+        if jq -e --arg bucket "$bucket" '
+          .lineage == "4717025d-f1e8-392e-2999-cd183598176a" and .serial == 2 and
+          ([.resources[]? | select(.mode == "managed" and .module == null and .type == "aws_s3_bucket" and .name == "web") | .instances[]?] |
+            length == 1 and .[0].status == "tainted" and .[0].attributes.id == $bucket and .[0].attributes.bucket == $bucket)
+        ' "$state_file" > /dev/null; then
+          aws s3api head-bucket --bucket "$bucket" --expected-bucket-owner "$AWS_ACCOUNT_ID"
+          aws s3api get-bucket-tagging --bucket "$bucket" --expected-bucket-owner "$AWS_ACCOUNT_ID" | jq -e '
+            [.TagSet[] | {key: .Key, value: .Value}] | from_entries |
+            .Application == "jimmy" and .Environment == "dev" and .ManagedBy == "terraform"
+          ' > /dev/null
+          terraform -chdir=infra/foundation untaint -lock-timeout=60s aws_s3_bucket.web
+        fi

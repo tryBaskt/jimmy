@@ -106,3 +106,17 @@ read the first user's run. These cloud checks are not replaced by offline tests.
 
 The persistent data layer is deliberately absent. Do not treat this release as durable
 research storage; session expiry removes run files and reports.
+
+## Initial bucket recovery
+
+The first dev bucket creation failed during Terraform's metadata refresh, leaving the
+existing bucket tainted. The recovery action checks the known state lineage and
+serial, exact bucket identity, account ownership, and Jimmy dev tags before clearing
+that one taint with Terraform's state lock. It skips other state snapshots and
+healthy resources, and runs during the next merge-triggered deployment. It does not
+delete or recreate the bucket. The bucket also has `prevent_destroy` enabled so later
+replacement plans stop for review. No `s3:DeleteBucket` permission is granted.
+
+The OpenAI secret version changes on each deployment because the write-only version
+counter uses the GitHub run number. That creates a new value version inside the same
+Secrets Manager secret; it does not replace the secret or change its ARN.
