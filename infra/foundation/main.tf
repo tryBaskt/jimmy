@@ -5,7 +5,10 @@ resource "aws_ecr_repository" "service" {
   image_scanning_configuration { scan_on_push = true }
 }
 
-resource "aws_s3_bucket" "web" { bucket = "${local.prefix}-web-${local.account}" }
+resource "aws_s3_bucket" "web" {
+  bucket = "${local.prefix}-web-${local.account}"
+  lifecycle { prevent_destroy = true }
+}
 
 resource "aws_s3_bucket_public_access_block" "web" {
   bucket                  = aws_s3_bucket.web.id

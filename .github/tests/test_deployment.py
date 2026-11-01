@@ -35,6 +35,14 @@ with open(os.environ["COMMAND_LOG"], "a") as log:
 if command == "aws":
     if args[:2] == ["sts", "get-caller-identity"]:
         print("123456789012")
+    elif args[:2] == ["s3api", "head-object"] and os.getenv("STATE_HEAD_RESULT", "exists") != "exists":
+        print("(403) Forbidden" if os.getenv("STATE_HEAD_RESULT") == "denied" else "(404) Not Found", file=sys.stderr)
+        sys.exit(254)
+    elif args[:2] == ["s3api", "get-bucket-tagging"]:
+        tags = {"Application": "jimmy", "Environment": "dev", "ManagedBy": "terraform"}
+        if os.getenv("INVALID_BUCKET_TAGS"):
+            tags["Environment"] = "prod"
+        print(json.dumps({"TagSet": [{"Key": k, "Value": v} for k, v in tags.items()]}))
     elif args[:2] == ["s3api", "head-bucket"] and os.getenv("HEAD_RESULT") != "exists":
         print("(403) Forbidden" if os.getenv("HEAD_RESULT") == "denied" else "(404) Not Found", file=sys.stderr)
         sys.exit(254)
@@ -44,6 +52,8 @@ if command == "aws":
 elif command == "terraform":
     if args[1] == os.getenv("FAIL_TERRAFORM"):
         sys.exit(1)
+    if args[1:3] == ["state", "pull"]:
+        print(os.environ["FOUNDATION_STATE"])
     if args[1] == "output":
         print(json.dumps({"environment": "dev", "runtime_arn": "arn:runtime"}))
 elif command == "curl":
@@ -230,7 +240,7 @@ def test_workflow_dependencies_state_and_guards_remain_isolated():
 
 def test_embedded_shell_has_valid_syntax():
     sources = [s["run"] for job in workflow()["jobs"].values() for s in job["steps"] if "run" in s]
-    sources += [action("deployment-config"), action("build-image")]
+    sources += [action("deployment-config"), action("build-image"), action("recover-foundation")]
     for source in sources:
         result = subprocess.run(["bash", "-n"], input=source, capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
@@ -267,3 +277,64 @@ def test_state_bucket_rejects_a_different_aws_account(runner):
     result = execute(step('provision-infrastructure', 'Ensure environment state bucket'), AWS_ACCOUNT_ID='999999999999')
     assert result.returncode != 0
     assert not any(c[1] == 's3api' for c in calls())
+
+
+def recover_bucket(runner, state=None, **overrides):
+    _, execute, calls = runner
+    state = state if state is not None else {
+        'lineage': '4717025d-f1e8-392e-2999-cd183598176a', 'serial': 2,
+        'resources': [{'mode': 'managed', 'type': 'aws_s3_bucket', 'name': 'web',
+                       'instances': [{'status': 'tainted', 'attributes': {
+                           'id': 'jimmy-dev-web-123456789012', 'bucket': 'jimmy-dev-web-123456789012'}}]}],
+    }
+    environment = {'FOUNDATION_STATE': json.dumps(state),
+                   'STATE_BUCKET': 'jimmy-dev-state-123456789012', 'HEAD_RESULT': 'exists'} | overrides
+    return execute(action('recover-foundation'), **environment), calls
+
+
+def test_known_failed_bucket_is_untainted_with_locking_and_ownership_checks(runner):
+    result, calls = recover_bucket(runner)
+    assert result.returncode == 0, result.stderr
+    untaint = next(c for c in calls() if 'untaint' in c)
+    assert untaint == ['terraform', '-chdir=infra/foundation', 'untaint', '-lock-timeout=60s', 'aws_s3_bucket.web']
+    head = next(c for c in calls() if c[1:3] == ['s3api', 'head-bucket'])
+    assert head[head.index('--bucket') + 1] == 'jimmy-dev-web-123456789012'
+    assert head[head.index('--expected-bucket-owner') + 1] == '123456789012'
+    assert not any('delete-bucket' in c or 'apply' in c for c in calls())
+
+
+@pytest.mark.parametrize('change', [
+    {'serial': 3}, {'lineage': 'another-state'}, {'resources': []},
+    {'resources': [{'mode': 'managed', 'type': 'aws_s3_bucket', 'name': 'web',
+                    'instances': [{'attributes': {'id': 'jimmy-dev-web-123456789012',
+                                                  'bucket': 'jimmy-dev-web-123456789012'}}]}]},
+    {'resources': [{'mode': 'managed', 'type': 'aws_s3_bucket', 'name': 'web',
+                    'instances': [{'status': 'tainted', 'attributes': {'id': 'other', 'bucket': 'other'}}]}]},
+])
+def test_recovery_never_clears_unknown_or_healthy_state(runner, change):
+    state = {'lineage': '4717025d-f1e8-392e-2999-cd183598176a', 'serial': 2} | change
+    result, calls = recover_bucket(runner, state)
+    assert result.returncode == 0, result.stderr
+    assert not any('untaint' in c for c in calls())
+
+
+@pytest.mark.parametrize('reference', ['refs/heads/feature', 'refs/heads/prod'])
+def test_dev_recovery_does_not_touch_other_branches(runner, reference):
+    result, calls = recover_bucket(runner, GITHUB_REF=reference)
+    assert result.returncode == 0
+    assert calls() == []
+
+
+@pytest.mark.parametrize('overrides', [{'INVALID_BUCKET_TAGS': '1'}, {'STATE_HEAD_RESULT': 'denied'},
+                                      {'FAIL_TERRAFORM': 'state'}, {'HEAD_RESULT': 'denied'},
+                                      {'STATE_BUCKET': 'another-state-bucket'}])
+def test_recovery_aborts_when_state_or_bucket_cannot_be_verified(runner, overrides):
+    result, calls = recover_bucket(runner, **overrides)
+    assert result.returncode != 0
+    assert not any('untaint' in c for c in calls())
+
+
+def test_recovery_skips_fresh_environment_without_state(runner):
+    result, calls = recover_bucket(runner, STATE_HEAD_RESULT='missing')
+    assert result.returncode == 0
+    assert not any(c[0] == 'terraform' for c in calls())
