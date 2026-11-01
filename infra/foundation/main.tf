@@ -80,9 +80,11 @@ resource "aws_apigatewayv2_api" "api" {
 }
 
 resource "aws_apigatewayv2_stage" "api" {
+  provider    = aws.stage
   api_id      = aws_apigatewayv2_api.api.id
   name        = "$default"
   auto_deploy = true
+  tags        = {}
   default_route_settings {
     throttling_burst_limit = 20
     throttling_rate_limit  = 10
