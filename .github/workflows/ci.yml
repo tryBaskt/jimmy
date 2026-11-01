@@ -53,5 +53,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install -e packages -e "services/$WORKFLOW_ID[runtime]" pytest
+      - run: pip install -e packages -e "services/$WORKFLOW_ID" pytest
+      - name: Verify API imports with base dependencies
+        run: python -c 'import importlib, os; importlib.import_module(os.environ["WORKFLOW_ID"] + "_api")'
+      - run: pip install -e "services/$WORKFLOW_ID[runtime]"
       - run: python -m pytest "services/$WORKFLOW_ID/tests"
