@@ -9,6 +9,13 @@ provider "aws" {
   region = var.region
   default_tags { tags = { Application = "jimmy", Environment = var.environment, ManagedBy = "terraform" } }
 }
+# API Gateway's stage create path checks an undocumented TagResource permission
+# for inline tags. Keep the system stage untagged; its API retains the default tags.
+provider "aws" {
+  alias  = "stage"
+  region = var.region
+  default_tags { tags = {} }
+}
 variable "region" { type = string }
 variable "environment" {
   type = string

@@ -120,3 +120,17 @@ replacement plans stop for review. No `s3:DeleteBucket` permission is granted.
 The OpenAI secret version changes on each deployment because the write-only version
 counter uses the GitHub run number. That creates a new value version inside the same
 Secrets Manager secret; it does not replace the secret or change its ARN.
+
+## API Gateway stage tags
+
+The system `$default` stage uses a separate AWS provider configuration with no
+default tags. Its parent API retains the Jimmy environment tags. Tagged stage
+creation failed with a request for `apigateway:TagResource`, while AWS Access
+Analyzer rejects that literal action as invalid and the official authorization
+reference maps tagging to HTTP-verb permissions already on the deployment role.
+Creating the system stage without inline tags avoids that inconsistent path without
+adding an undocumented IAM action. No stage or API deletion permission is added.
+
+The Cognito provisioning role also needs `cognito-idp:GetUserPoolMfaConfig`: the
+provider reads MFA configuration even when MFA is off. This read is restricted to
+user pools tagged for Jimmy and the matching environment.
