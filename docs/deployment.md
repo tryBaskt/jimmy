@@ -158,3 +158,19 @@ resource tagging. The deployment policy includes `CreateAgentRuntimeEndpoint` an
 Jimmy and matching-environment request tags. The create check uses `runtime/*`
 before a runtime ID exists. Later runtime management remains scoped to the workflow
 name prefix. This does not grant runtime invocation or resource deletion.
+
+AgentCore also checks `TagResource` on the default workload identity directory and
+its generated `jimmy_<env>_*` identities. The deployment role permits tagging that
+exact directory and identities belonging to its environment.
+
+AgentCore creates `/aws/bedrock-agentcore/runtimes/<runtime-id>-DEFAULT` itself.
+Workflow provisioning first applies the runtime and its dependencies, then imports
+that exact log group if Terraform does not already manage it. It validates the
+runtime ID against the selected workflow and environment before importing. The
+final plan always reconciles the full workflow, including log retention, encryption
+and tags. No log groups are deleted to recover an existing deployment.
+
+Foundation provisions an ECR image retrieval policy for each workflow API repository.
+It grants the Lambda service only image reads, restricted to that workflow's exact
+function ARN. The bootstrap deployment role can set repository policies only on
+`jimmy-<env>-*-api` repositories; runtime and other-environment repositories are excluded.

@@ -101,6 +101,12 @@
       ]
     },
     {
+      "Sid": "ApiRepositoryPolicies",
+      "Effect": "Allow",
+      "Action": ["ecr:SetRepositoryPolicy"],
+      "Resource": ["arn:aws:ecr:${region}:${account_id}:repository/jimmy-${environment}-*-api"]
+    },
+    {
       "Sid": "RegistryLogin",
       "Effect": "Allow",
       "Action": [
@@ -213,6 +219,17 @@
         "bedrock-agentcore:CreateWorkloadIdentity",
         "bedrock-agentcore:GetWorkloadIdentity",
         "bedrock-agentcore:UpdateWorkloadIdentity"
+      ],
+      "Resource": [
+        "arn:aws:bedrock-agentcore:${region}:${account_id}:workload-identity-directory/default",
+        "arn:aws:bedrock-agentcore:${region}:${account_id}:workload-identity-directory/default/workload-identity/jimmy_${environment}_*"
+      ]
+    },
+    {
+      "Sid": "TagWorkflowIdentities",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock-agentcore:TagResource"
       ],
       "Resource": [
         "arn:aws:bedrock-agentcore:${region}:${account_id}:workload-identity-directory/default",

@@ -5,6 +5,18 @@ resource "aws_ecr_repository" "service" {
   image_scanning_configuration { scan_on_push = true }
 }
 
+# Lambda pulls images as a service principal, separately from the execution role.
+resource "aws_ecr_repository_policy" "api" {
+  for_each   = { for key, repo in local.workflow_repositories : key => repo if repo.kind == "api" }
+  repository = aws_ecr_repository.service[each.key].name
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{
+    Sid       = "LambdaImageRetrieval", Effect = "Allow",
+    Principal = { Service = "lambda.amazonaws.com" },
+    Action    = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+    Condition = { ArnLike = { "aws:SourceArn" = "arn:aws:lambda:${var.region}:${local.account}:function:${local.prefix}-${replace(each.value.id, "_", "-")}-api" } }
+  }] })
+}
+
 resource "aws_s3_bucket" "web" {
   bucket = "${local.prefix}-web-${local.account}"
   lifecycle { prevent_destroy = true }
