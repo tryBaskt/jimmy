@@ -134,3 +134,12 @@ adding an undocumented IAM action. No stage or API deletion permission is added.
 The Cognito provisioning role also needs `cognito-idp:GetUserPoolMfaConfig`: the
 provider reads MFA configuration even when MFA is off. This read is restricted to
 user pools tagged for Jimmy and the matching environment.
+
+## Terraform state bucket configuration
+
+Each Terraform job derives `STATE_BUCKET` directly from the branch and the GitHub
+environment's `AWS_ACCOUNT_ID` secret. Do not pass this value through job outputs:
+GitHub suppresses outputs containing secrets, including bucket names containing the
+secret account ID, which otherwise leaves downstream backend configuration empty.
+The jobs validate the bucket name before initialization. Foundation/auth resource
+metadata continues to pass through the existing JSON artifacts.

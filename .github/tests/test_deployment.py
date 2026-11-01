@@ -91,7 +91,7 @@ def runner(tmp_path):
         "GITHUB_REF": "refs/heads/dev", "GITHUB_SHA": "commit123", "JIMMY_ENV": "dev",
         "GITHUB_OUTPUT": str(tmp_path / "outputs"), "GITHUB_ENV": str(tmp_path / "environment"),
         "COMMAND_LOG": str(tmp_path / "commands"), "AWS_REGION": "us-east-1", "AWS_ACCOUNT_ID": "123456789012", "DEPLOY_ENV": "dev",
-        "STATE_BUCKET": "state-bucket", "INCLUDE_AUTH": "false", "WORKFLOW_ID": "",
+        "STATE_BUCKET": "jimmy-dev-state-123456789012", "INCLUDE_AUTH": "false", "WORKFLOW_ID": "",
     }
 
     def execute(body, **overrides):
@@ -115,7 +115,7 @@ def test_state_bootstrap_preserves_region_and_security(runner, region):
     assert {c[2] for c in calls() if c[1] == "s3api"} >= {
         "put-bucket-versioning", "put-public-access-block", "put-bucket-encryption",
     }
-    assert (folder / "outputs").read_text() == "bucket=jimmy-dev-state-123456789012\n"
+    assert (folder / "outputs").read_text() == ""
 
 
 def test_state_bootstrap_does_not_treat_access_denied_as_missing(runner):
@@ -338,3 +338,38 @@ def test_recovery_skips_fresh_environment_without_state(runner):
     result, calls = recover_bucket(runner, STATE_HEAD_RESULT='missing')
     assert result.returncode == 0
     assert not any(c[0] == 'terraform' for c in calls())
+
+
+def test_backend_bucket_is_derived_in_each_job_without_cross_job_secret_outputs():
+    jobs = workflow()['jobs']
+    assert set(jobs['provision-infrastructure']['outputs']) == {'workflows'}
+    expected = "${{ format('jimmy-{0}-state-{1}', github.ref_name, secrets.AWS_ACCOUNT_ID) }}"
+    for name in ['provision-infrastructure', 'provision-auth', 'provision-workflows']:
+        job = jobs[name]
+        assert job['env']['STATE_BUCKET'] == expected
+        # A step override must not replace the job's value with a skipped output.
+        assert not any('STATE_BUCKET' in step.get('env', {}) for step in job['steps'])
+    assert 'outputs.state_bucket' not in json.dumps(jobs)
+    assert 'steps.state.outputs.bucket' not in json.dumps(jobs)
+
+
+@pytest.mark.parametrize('job,step_name', [
+    ('provision-infrastructure', 'Initialize foundation'),
+    ('provision-auth', 'Provision Cognito and JWT authorizer'),
+    ('provision-workflows', 'Provision workflow'),
+])
+@pytest.mark.parametrize('bucket', ['', '   ', 'jimmy-dev-state-', 'unexpected-bucket'])
+def test_invalid_backend_bucket_fails_before_terraform_initialization(runner, job, step_name, bucket):
+    _, execute, calls = runner
+    result = execute(step(job, step_name), STATE_BUCKET=bucket)
+    assert result.returncode != 0
+    assert calls() == []
+
+
+def test_auth_initialization_uses_the_job_bucket_when_upstream_outputs_are_absent(runner):
+    _, execute, calls = runner
+    # No GitHub job-output value is supplied: the environment-derived bucket suffices.
+    result = execute(step('provision-auth', 'Provision Cognito and JWT authorizer'))
+    assert result.returncode == 0, result.stderr
+    init = next(c for c in calls() if c[0] == 'terraform' and c[2] == 'init')
+    assert '-backend-config=bucket=jimmy-dev-state-123456789012' in init
