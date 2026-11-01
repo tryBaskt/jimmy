@@ -1,0 +1,499 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ApplicationRoles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetRole",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:ListRoleTags",
+        "iam:PutRolePolicy",
+        "iam:GetRolePolicy",
+        "iam:ListRolePolicies",
+        "iam:ListAttachedRolePolicies"
+      ],
+      "Resource": [
+        "arn:aws:iam::${account_id}:role/jimmy-${environment}-*-api",
+        "arn:aws:iam::${account_id}:role/jimmy-${environment}-*-runtime"
+      ]
+    },
+    {
+      "Sid": "PassApplicationRoles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:PassRole"
+      ],
+      "Resource": [
+        "arn:aws:iam::${account_id}:role/jimmy-${environment}-*-api",
+        "arn:aws:iam::${account_id}:role/jimmy-${environment}-*-runtime"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": [
+            "lambda.amazonaws.com",
+            "bedrock-agentcore.amazonaws.com"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "Buckets",
+      "Effect": "Allow",
+      "Action": [
+        "s3:CreateBucket",
+        "s3:GetBucket*",
+        "s3:PutBucket*",
+        "s3:ListBucket*",
+        "s3:GetEncryptionConfiguration",
+        "s3:PutEncryptionConfiguration",
+        "s3:GetAccelerateConfiguration"
+      ],
+      "Resource": [
+        "arn:aws:s3:::jimmy-${environment}-state-${account_id}",
+        "arn:aws:s3:::jimmy-${environment}-web-${account_id}"
+      ]
+    },
+    {
+      "Sid": "StateAndWebObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:GetObjectVersion",
+        "s3:AbortMultipartUpload",
+        "s3:ListMultipartUploadParts"
+      ],
+      "Resource": [
+        "arn:aws:s3:::jimmy-${environment}-state-${account_id}/*",
+        "arn:aws:s3:::jimmy-${environment}-web-${account_id}/*"
+      ]
+    },
+    {
+      "Sid": "Repositories",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:CreateRepository",
+        "ecr:DescribeRepositories",
+        "ecr:DescribeImages",
+        "ecr:ListImages",
+        "ecr:GetRepositoryPolicy",
+        "ecr:GetLifecyclePolicy",
+        "ecr:GetLifecyclePolicyPreview",
+        "ecr:PutImageScanningConfiguration",
+        "ecr:PutImageTagMutability",
+        "ecr:ListTagsForResource",
+        "ecr:TagResource",
+        "ecr:UntagResource",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload",
+        "ecr:PutImage",
+        "ecr:BatchGetImage",
+        "ecr:GetDownloadUrlForLayer"
+      ],
+      "Resource": [
+        "arn:aws:ecr:${region}:${account_id}:repository/jimmy-${environment}-*"
+      ]
+    },
+    {
+      "Sid": "RegistryLogin",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:GetAuthorizationToken"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ApiFunctions",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:CreateFunction",
+        "lambda:UpdateFunctionCode",
+        "lambda:UpdateFunctionConfiguration",
+        "lambda:PublishVersion",
+        "lambda:AddPermission",
+        "lambda:RemovePermission",
+        "lambda:TagResource",
+        "lambda:UntagResource",
+        "lambda:GetFunction",
+        "lambda:GetFunctionConfiguration",
+        "lambda:GetPolicy",
+        "lambda:GetFunctionCodeSigningConfig",
+        "lambda:ListVersionsByFunction",
+        "lambda:ListTags"
+      ],
+      "Resource": [
+        "arn:aws:lambda:${region}:${account_id}:function:jimmy-${environment}-*-api"
+      ]
+    },
+    {
+      "Sid": "OpenAISecret",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:UpdateSecret",
+        "secretsmanager:UpdateSecretVersionStage",
+        "secretsmanager:ListSecretVersionIds",
+        "secretsmanager:GetResourcePolicy",
+        "secretsmanager:TagResource",
+        "secretsmanager:UntagResource",
+        "secretsmanager:RestoreSecret"
+      ],
+      "Resource": [
+        "arn:aws:secretsmanager:${region}:${account_id}:secret:jimmy-${environment}-openai-api-key-*"
+      ]
+    },
+    {
+      "Sid": "NeverReadSecretValues",
+      "Effect": "Deny",
+      "Action": [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:BatchGetSecretValue"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CreateRuntimes",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock-agentcore:CreateAgentRuntime"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Application": "jimmy",
+          "aws:RequestTag/Environment": "${environment}"
+        }
+      }
+    },
+    {
+      "Sid": "WorkflowRuntimes",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock-agentcore:GetAgentRuntime",
+        "bedrock-agentcore:UpdateAgentRuntime",
+        "bedrock-agentcore:ListAgentRuntimeVersions",
+        "bedrock-agentcore:ListAgentRuntimeEndpoints",
+        "bedrock-agentcore:TagResource",
+        "bedrock-agentcore:UntagResource",
+        "bedrock-agentcore:ListTagsForResource"
+      ],
+      "Resource": [
+        "arn:aws:bedrock-agentcore:${region}:${account_id}:runtime/jimmy_${environment}_*"
+      ]
+    },
+    {
+      "Sid": "WorkflowIdentity",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock-agentcore:CreateWorkloadIdentity",
+        "bedrock-agentcore:GetWorkloadIdentity",
+        "bedrock-agentcore:UpdateWorkloadIdentity"
+      ],
+      "Resource": [
+        "arn:aws:bedrock-agentcore:${region}:${account_id}:workload-identity-directory/default",
+        "arn:aws:bedrock-agentcore:${region}:${account_id}:workload-identity-directory/default/workload-identity/jimmy_${environment}_*"
+      ]
+    },
+    {
+      "Sid": "WorkflowLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:PutRetentionPolicy",
+        "logs:AssociateKmsKey",
+        "logs:DisassociateKmsKey",
+        "logs:TagResource",
+        "logs:UntagResource",
+        "logs:ListTagsForResource",
+        "logs:ListTagsLogGroup"
+      ],
+      "Resource": [
+        "arn:aws:logs:${region}:${account_id}:log-group:/aws/lambda/jimmy-${environment}-*",
+        "arn:aws:logs:${region}:${account_id}:log-group:/aws/bedrock-agentcore/runtimes/jimmy_${environment}_*"
+      ]
+    },
+    {
+      "Sid": "DescribeLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DescribeLogGroups"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "${region}"
+        }
+      }
+    },
+    {
+      "Sid": "CreateAuth",
+      "Effect": "Allow",
+      "Action": [
+        "cognito-idp:CreateUserPool"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Application": "jimmy",
+          "aws:RequestTag/Environment": "${environment}"
+        }
+      }
+    },
+    {
+      "Sid": "AuthResources",
+      "Effect": "Allow",
+      "Action": [
+        "cognito-idp:DescribeUserPool",
+        "cognito-idp:UpdateUserPool",
+        "cognito-idp:CreateUserPoolClient",
+        "cognito-idp:DescribeUserPoolClient",
+        "cognito-idp:UpdateUserPoolClient",
+        "cognito-idp:CreateUserPoolDomain",
+        "cognito-idp:UpdateUserPoolDomain",
+        "cognito-idp:TagResource",
+        "cognito-idp:UntagResource",
+        "cognito-idp:ListTagsForResource"
+      ],
+      "Resource": [
+        "arn:aws:cognito-idp:${region}:${account_id}:userpool/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/Application": "jimmy",
+          "aws:ResourceTag/Environment": "${environment}"
+        }
+      }
+    },
+    {
+      "Sid": "DescribeAuthDomains",
+      "Effect": "Allow",
+      "Action": [
+        "cognito-idp:DescribeUserPoolDomain"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "${region}"
+        }
+      }
+    },
+    {
+      "Sid": "HttpGateway",
+      "Effect": "Allow",
+      "Action": [
+        "apigateway:GET",
+        "apigateway:POST",
+        "apigateway:PUT",
+        "apigateway:PATCH"
+      ],
+      "Resource": [
+        "arn:aws:apigateway:${region}::/apis",
+        "arn:aws:apigateway:${region}::/apis/*",
+        "arn:aws:apigateway:${region}::/tags/*"
+      ]
+    },
+    {
+      "Sid": "CreateWebDistribution",
+      "Effect": "Allow",
+      "Action": [
+        "cloudfront:CreateDistribution"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Application": "jimmy",
+          "aws:RequestTag/Environment": "${environment}"
+        }
+      }
+    },
+    {
+      "Sid": "WebDistribution",
+      "Effect": "Allow",
+      "Action": [
+        "cloudfront:GetDistribution",
+        "cloudfront:GetDistributionConfig",
+        "cloudfront:UpdateDistribution",
+        "cloudfront:CreateInvalidation",
+        "cloudfront:GetInvalidation",
+        "cloudfront:ListTagsForResource",
+        "cloudfront:TagResource",
+        "cloudfront:UntagResource"
+      ],
+      "Resource": [
+        "arn:aws:cloudfront::${account_id}:distribution/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/Application": "jimmy",
+          "aws:ResourceTag/Environment": "${environment}"
+        }
+      }
+    },
+    {
+      "Sid": "CreateOriginAccess",
+      "Effect": "Allow",
+      "Action": [
+        "cloudfront:CreateOriginAccessControl"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "OriginAccess",
+      "Effect": "Allow",
+      "Action": [
+        "cloudfront:GetOriginAccessControl",
+        "cloudfront:UpdateOriginAccessControl"
+      ],
+      "Resource": [
+        "arn:aws:cloudfront::${account_id}:origin-access-control/*"
+      ]
+    },
+    {
+      "Sid": "CreateLogKey",
+      "Effect": "Allow",
+      "Action": [
+        "kms:CreateKey"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Application": "jimmy",
+          "aws:RequestTag/Environment": "${environment}"
+        }
+      }
+    },
+    {
+      "Sid": "LogKey",
+      "Effect": "Allow",
+      "Action": [
+        "kms:DescribeKey",
+        "kms:GetKeyPolicy",
+        "kms:PutKeyPolicy",
+        "kms:GetKeyRotationStatus",
+        "kms:EnableKeyRotation",
+        "kms:DisableKeyRotation",
+        "kms:CancelKeyDeletion",
+        "kms:ListResourceTags",
+        "kms:TagResource",
+        "kms:UntagResource",
+        "kms:CreateAlias",
+        "kms:UpdateAlias"
+      ],
+      "Resource": [
+        "arn:aws:kms:${region}:${account_id}:key/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/Application": "jimmy",
+          "aws:ResourceTag/Environment": "${environment}"
+        }
+      }
+    },
+    {
+      "Sid": "LogAlias",
+      "Effect": "Allow",
+      "Action": [
+        "kms:CreateAlias",
+        "kms:UpdateAlias"
+      ],
+      "Resource": [
+        "arn:aws:kms:${region}:${account_id}:alias/jimmy-${environment}-logs"
+      ]
+    },
+    {
+      "Sid": "ListKeyAliases",
+      "Effect": "Allow",
+      "Action": [
+        "kms:ListAliases"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "${region}"
+        }
+      }
+    },
+    {
+      "Sid": "TagNewDistribution",
+      "Effect": "Allow",
+      "Action": [
+        "cloudfront:TagResource"
+      ],
+      "Resource": [
+        "arn:aws:cloudfront::${account_id}:distribution/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Application": "jimmy",
+          "aws:RequestTag/Environment": "${environment}"
+        }
+      }
+    },
+    {
+      "Sid": "TagNewLogKey",
+      "Effect": "Allow",
+      "Action": [
+        "kms:TagResource"
+      ],
+      "Resource": [
+        "arn:aws:kms:${region}:${account_id}:key/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Application": "jimmy",
+          "aws:RequestTag/Environment": "${environment}"
+        }
+      }
+    },
+    {
+      "Sid": "TagNewAuth",
+      "Effect": "Allow",
+      "Action": [
+        "cognito-idp:TagResource"
+      ],
+      "Resource": [
+        "arn:aws:cognito-idp:${region}:${account_id}:userpool/*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/Application": "jimmy",
+          "aws:RequestTag/Environment": "${environment}"
+        }
+      }
+    },
+    {
+      "Sid": "CreateBoundedApplicationRoles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole"
+      ],
+      "Resource": [
+        "arn:aws:iam::${account_id}:role/jimmy-${environment}-*-api",
+        "arn:aws:iam::${account_id}:role/jimmy-${environment}-*-runtime"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "iam:PermissionsBoundary": "arn:aws:iam::${account_id}:policy/jimmy-${environment}-workflow-permissions-boundary"
+        }
+      }
+    },
+    {
+      "Sid": "ReleaseTerraformLocks",
+      "Effect": "Allow",
+      "Action": [
+        "s3:DeleteObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::jimmy-${environment}-state-${account_id}/foundation/terraform.tfstate.tflock",
+        "arn:aws:s3:::jimmy-${environment}-state-${account_id}/auth/terraform.tfstate.tflock",
+        "arn:aws:s3:::jimmy-${environment}-state-${account_id}/workflows/*/terraform.tfstate.tflock"
+      ]
+    }
+  ]
+}

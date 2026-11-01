@@ -1,174 +1,91 @@
-# Jimmy: paper replication workspace
+# Jimmy
 
-A ground-up AWS application that identifies a finance paper's main claim and supporting experiment suite, reconstructs supported experiments using available data, records substitutions and caveats, compares published results, and runs exploratory extrapolations before producing a final assessment.
+Workflow-oriented research applications hosted on Amazon Bedrock AgentCore, using OpenAI models. Each workflow
+owns its HTTP API and execution code. API Gateway routes to the workflow's own
+Lambda adapter, which invokes that workflow's AgentCore runtime.
 
-The browser shows plans, connector activity, data decisions, code artifacts, experiment results and comparisons during execution. Interpretation is read-only. Results have exactly two groups: **paper experiments** (original or modified) and **extrapolated experiments**.
-
-## Repository structure
-
-- `apis/projects/`: project creation and ownership-scoped workspace reads.
-- `apis/research/`: asynchronous run creation, status, inspection and cancellation.
-- `apis/data/`: upload intents, validation and input freezing.
-- `apis/artifacts/`: authorized artifact discovery and downloads.
-- `apis/activity/`: durable activity replay and single-use WebSocket tickets.
-- `apis/identity/`: identity and health endpoints.
-- `apis/app.py`: common application factory; production loads one service per Lambda, local development mounts all services.
-- `packages/paperlab/`: validated contracts, storage, Bedrock agents, connector registry, catalog, numerical templates and workflow stages.
-- `workers/replication/`: non-HTTP ECS stage execution entry point.
-- `frontend/`: React/TypeScript workspace.
-- `infra/bootstrap/`: one-time GitHub federation, dev/prod deployment roles, ECR repositories and Terraform-state buckets.
-- `infra/environments/`: new environment-scoped application infrastructure.
-- `tests/`: numerical, catalog, API, workflow and mocked-AWS checks.
-
-No previous application code or deployed resource is an implementation dependency.
-
-## API Gateway and service boundaries
-
-One HTTP API Gateway routes service prefixes to independently configured Lambda functions:
-
-| Prefix | Service |
-| --- | --- |
-| `/api/projects` | Projects |
-| `/api/research/*` | Research |
-| `/api/data/*` | Data |
-| `/api/artifacts/*` | Artifacts |
-| `/api/activity/*` | Activity |
-| `/api/identity/*`, `/api/health` | Identity/health |
-
-Production functions share an immutable API image but load only their own router through `API_SERVICE`. Each has its own role, logs and configuration. Shared contracts are an internal Python package. New services add a router and gateway integration without changing the API hostname. Metadata uses a shared table initially, with application-enforced project ownership; this is not independent-database-per-service isolation.
-
-## Supported behavior and limits
-
-- Bedrock uses **Kimi K3 (`us.moonshotai.kimi-k3`) for all AI roles**: scientific planning, data-suitability decisions, extrapolations and the plain-language evidence assessment. Kimi uses the native `InvokeModel` API with explicit `high` reasoning and a 32,768-token limit for planner work, and `low` reasoning with an 8,192-token limit for worker work. Incomplete responses record their stop reason and usage and are rejected. Reasoning text is never persisted or replayed. Models are independently configurable. No silent fallback model is used. Account model access must be enabled in the deployment region.
-- PDF extraction preserves page references and rejects ungrounded model citations. Scanned/sparse PDFs use a bounded AWS Textract fallback in the AWS deployment. OCR still requires human-scored extraction evaluation; unreadable content fails explicitly.
-- Trusted numerical templates implement monthly equal-weight momentum sorts with overlapping cohorts and one explicitly identified monthly return series. Holdings use information before the evaluated month. One-week entry delays, arbitrary regressions, fundamental sorts and other methods are marked unsupported, not approximated invisibly.
-- Model-generated Python is never executed. The implementation artifact contains the checked numerical template; unsupported methods remain visible coverage gaps.
-- Each stage is executed in an ephemeral Fargate task. Numerical stages have a separate role without Bedrock/secret permissions and a security group without public internet access. They run only trusted templates, not arbitrary uploaded scripts.
-- Statistics use HAC standard errors with holding-period-based lags. Returns are before transaction, financing, shorting and market-impact costs. A compounded long-short spread is hypothetical per-dollar-long wealth, not a funded-account return.
-- Extrapolations proposed after observed results are **exploratory**. The application does not label them untouched holdout validation. A reserved-holdout training/evaluation protocol is not implemented.
-- YAML/PDF/model content cannot create arbitrary tools, execute code, change ownership or directly select arbitrary URLs.
-
-## Data connectors and cache
-
-The registry in `packages/paperlab/connectors/` exposes `discover(requirement, scope)` and `fetch(candidate)`. New connectors implement those methods and register with the workflow; API Gateway changes are unnecessary for another provider.
-
-- **yfinance** retrieves adjusted daily prices and derives monthly returns. Explicit ticker selection is required; current symbols do not establish historical membership. Delisted securities and historical data vintages are not guaranteed. These limitations force qualified, modified paper-experiment results.
-- **Bigdata.com** uses its remote MCP server (`https://mcp.bigdata.com/`) for schema-discovered read-only screening, entity resolution and document search. The API key is injected into worker tasks by ECS from Secrets Manager; it never enters model prompts or the browser. No Bigdata REST fallback is enabled. The connected MCP inventory does not expose raw historical daily prices, so price series come from yfinance; document narratives are never numerical inputs.
-- **CSV uploads** support `date,security_id,return`, with decimal monthly returns, unique security-month rows, finite values and no returns below -1. Uploads remain project-private. Upload data before starting a run.
-
-Adapters consult a scoped catalog before retrieval. Exact cached requests reuse immutable object references; concurrent requests coordinate with a fenced acquisition lease. Source refreshes preserve retrieval history, and identical bytes reuse the same canonical object. Different scopes never share object identity. Data revisions get new versions, and each execution freezes its selected manifest. No project-deletion/garbage-collection endpoint is exposed yet; retained source snapshots are not automatically expired.
-
-Cross-user Yahoo caching is controlled by `YFINANCE_SHARED_CACHE` (default false). Enable it only when the provider's terms permit platform-wide reuse. Bigdata content stays project-scoped initially. Compatible superset snapshots can be reused with explicit security/date filters; partial-range acquisition and automated garbage collection remain future optimizations. Retained object references are recorded now.
-
-## Local development
-
-Requires Python 3.12+ and Node 22+.
-
-```sh
-python3 -m venv .venv
-.venv/bin/pip install -c requirements.lock -e '.[dev]'
-.venv/bin/uvicorn apis.app:app --host 127.0.0.1 --port 8000
+```text
+workflows.json                       Registry used by CI, deployment and infrastructure
+services/paper_replication/
+  src/paper_replication_api.py        Workflow-owned HTTP endpoints
+  src/                               Graph, agents, runtime, data and numerical modules
+  Dockerfile.api                     API Lambda image
+  Dockerfile                         AgentCore runtime image
+packages/                Shared auth, transport and app setup
+infra/foundation/                    Gateway, hosting, repositories and shared log encryption
+infra/auth/                          Cognito and JWT authorizer
+infra/modules/workflow/              Reusable API + AgentCore deployment module
+infra/workflows/                     Module entry point, separate state per workflow
+.github/workflows/                   Registry-driven CI and deployment matrices
+.github/actions/                     Reusable deployment steps
 ```
 
-In another terminal:
+There is no central API service or central Python router to update. Shared helpers
+contain infrastructure concerns; paper-specific routes, schemas and graph logic stay
+inside the paper replication service.
 
-```sh
-npm --prefix frontend ci
-npm --prefix frontend run dev
+## Add a workflow
+
+Create `services/<id>/` with its API, AgentCore runtime, dependencies, Dockerfiles
+and tests. Add an entry to `workflows.json`; CI and deployment discover it automatically.
+Add frontend views as needed.
+
+See [adding a workflow](docs/adding-a-workflow.md) for the ownership and execution contract.
+
+## Paper replication
+
+The planner extracts page-grounded claims, acquires actual observations, checks
+coverage, performs bounded data replanning, freezes experiments, runs trusted
+numerical templates in parallel, and produces an evidence-based report. Unsupported
+methods and missing data stay visible. Model-generated Python is never executed.
+
+The frontend calls `/api/paper-replication/*`. Cognito provides sign-in, API Gateway
+checks JWTs, and the workflow API checks the user's identity and passes it to its
+IAM-authenticated runtime. Every runtime artifact request checks ownership.
+
+The persistent data layer is deferred. Run files live inside the AgentCore session
+and are lost when it ends; browser-local run summaries are not durable history.
+Download reports while the session is available. Sessions expire after 15 idle
+minutes or the configured eight-hour maximum. Runs are not resumable. Searchable
+PDFs up to 3 MB / 250 pages are supported; scanned papers need OCR first. Web search
+is disabled until a real provider is configured.
+
+## Verification
+
+The application runs in AWS: CloudFront serves the frontend, API Gateway routes to
+Lambda, Cognito authenticates users, and AgentCore hosts each workflow. OpenAI
+provides model inference. There is no local application runtime or authentication bypass.
+
+Tests and builds can run without deploying or accessing AWS. Use Python 3.12 and Node 24:
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m pytest -q
+npm --prefix apps/web ci
+npm --prefix apps/web test
+npm --prefix apps/web run build
 ```
 
-Open `http://localhost:5173`. Local mode uses a loopback-only development identity, SQLite metadata and local immutable object files under `.paperlab/`. It requires AWS credentials with Bedrock access for actual AI runs. Numerical tests do not require credentials or internet. `PLANNER_MODEL_ID`, `WORKER_MODEL_ID` and `AWS_REGION` configure Bedrock. For local Bigdata testing, inject `BIGDATA_API_KEY` through your secret manager; do not commit an `.env` file or print the key.
+GitHub environments provide `AWS_ACCOUNT_ID`, `AWS_REGION`, and `OPENAI_API_KEY`
+secrets. Terraform creates the OpenAI secret and passes its ARN to AgentCore automatically.
+The dev deployment role is bootstrapped, so merge into `dev` to deploy. The runtime loads its key from Secrets Manager;
+it does not read `.env` files. `OPENAI_MODEL` defaults to `gpt-6.1-sol`.
 
-The local runner is for trusted development only; AWS uses Fargate. Closing the browser does not cancel an AWS run. Cancellation persists immediately and is checked between stages/experiments; terminating the state-machine execution requests cancellation of its running service integration.
+## Deployment
 
-## Bootstrap AWS once
+Pushes to `dev` and `prod` deploy to the matching GitHub environment. Protect those
+branches to require reviewed merges and passing CI. PRs never deploy; there is no
+manual deployment trigger.
 
-This is a new deployment, not an import of previous infrastructure. NAT gateways and private endpoints incur charges while idle.
+Infrastructure is provisioned first, then Cognito. A matrix job named for each
+registered workflow builds its two ARM64 images and applies the reusable deployment
+module using state key `workflows/<id>/terraform.tfstate`. Workflows deploy independently
+in parallel. Frontend publishing waits for all workflow jobs to succeed and verifies
+each registered API's health/authentication.
 
-```sh
-terraform -chdir=infra/bootstrap init
-terraform -chdir=infra/bootstrap plan
-terraform -chdir=infra/bootstrap apply
-```
-
-If your account already has GitHub's OIDC provider, supply its ARN through `github_oidc_provider_arn`. Keep bootstrap state securely; move it to a separately managed remote backend after initialization. The bootstrap creates `jimmy-dev-*` and `jimmy-prod-*` deployment foundations. Runtime resources follow `jimmy-<env>-<purpose>`; globally unique buckets/domains additionally include the account ID. AWS-managed rules and service-linked roles retain their service-defined names.
-
-Use the appropriate operator `AWS_PROFILE` when running bootstrap. Account-specific settings can be kept in ignored `infra/bootstrap/local.auto.tfvars`. The `repository` input must match the repository portion of GitHub's actual OIDC subject, including `owner@owner_id/repo@repo_id` when ID-based subjects are emitted. Preserve this local configuration along with the ignored bootstrap state for subsequent applies. The new application's frontend uses `jimmy-<env>-workspace-frontend-<account>` to avoid the legacy frontend bucket name.
-
-The bootstrap role policies are deployment-operator policies, broader than runtime policies. They can provision networking, CloudFront and gateways and should be administered only by trusted operators; use separate accounts/permission boundaries for strict dev/prod control. They cannot modify the other environment's application IAM role path. Runtime roles have narrower table, bucket, model and execution permissions.
-
-## Separate dev and production deployment
-
-Create GitHub environments `dev` and `prod`. Set these **environment secrets** in each:
-
-| Secret | Value |
-| --- | --- |
-| `AWS_ACCOUNT_ID` | Deployment account |
-| `AWS_DEPLOY_ROLE_ARN` | Matching bootstrap deployment-role output |
-| `BIGDATA_SECRET_ARN` | Optional **actual Bigdata API key**; this existing GitHub name is retained for compatibility |
-| `ALERT_EMAIL` | Optional email to subscribe to failure alerts; confirm the SNS subscription |
-
-Set `AWS_REGION` as an **environment variable** (default `us-east-1`; must support both Bedrock profiles). `YFINANCE_SHARED_CACHE` is also an optional environment variable: `true` only for authorized shared reuse; otherwise `false`.
-
-Deployment securely creates or updates `jimmy-<env>-bigdata-api-key` and `jimmy-<env>-alert-email` in AWS Secrets Manager from the GitHub secrets. The misleading GitHub name `BIGDATA_SECRET_ARN` contains the key; the workflow maps it to a step-local `BIGDATA_API_KEY`, then passes only the resulting **AWS ARN** to Terraform. ECS injects the API key into worker tasks at runtime. You do not need to create the AWS secrets manually. Bootstrap permissions allow writing only these two named secrets for the matching environment, without reading their values. **If you already applied bootstrap, apply it again before deploying this change** to grant those permissions.
-
-The alert recipient is configured through SNS after infrastructure deployment, outside Terraform, so the address is absent from Terraform plans/state. SNS must know the destination to deliver alerts; confirm its email subscription. The dedicated alerts topic has one deployment-managed email recipient; changing the GitHub email replaces confirmed old email subscriptions. Pending old requests cannot deliver until confirmed; remove obsolete pending requests in SNS when changing addresses. Omitting an optional GitHub secret preserves the existing AWS secret; omitting the email preserves existing subscriptions. Removing the Bigdata GitHub secret disables connector injection on the next deployment but does not delete the retained AWS secret.
-
-Private values are sent directly from step-scoped environment variables to the AWS SDK, not command arguments, files, Terraform inputs/state or job output. Never place them in GitHub variables, prompts or this repository. The sync uses the AWS-managed Secrets Manager encryption key; customer-managed keys require additional write/decrypt permissions. Changing a GitHub secret takes effect on the next environment deployment, which creates a new stored version; newly launched worker tasks receive it, while already-running tasks retain their injected value. Repeated syncs create versions; do not run this as a high-frequency rotation loop. Terraform destroy does not remove these deployment-managed secrets; retire them separately when decommissioning an environment. Deleting the SNS topic removes its subscriptions.
-
-- **Merge to `dev`:** `deploy-dev.yml` invokes the component workflow: CI, secret provisioning, separate backend/worker image builds and frontend build, infrastructure provisioning, per-service backend and realtime releases, worker/runner registration, research workflow release, alerts, frontend publishing and final verification. Its Actions summary contains the **frontend URL**. Terraform also outputs it.
-- **Production:** manually dispatch `deploy-prod.yml` from `main`. Configure required reviewers and branch restrictions on the `prod` GitHub environment. Production uses separate state, image repositories, identity, data and compute.
-- The workflows never merge branches. Branch protection should require the CI checks before merging.
-
-### Separate deployment jobs
-
-Dev and prod keep separate entry workflows and environment protection. Both call `deploy-components.yml`, whose jobs appear separately in Actions:
-
-| Job | Responsibility |
-| --- | --- |
-| Checks | Run the existing CI suite |
-| Provision secrets | Copy key/email privately into Secrets Manager; export only ARN references |
-| Build backend / build workers / build frontend | Produce independent build artifacts |
-| Provision infrastructure | The sole Terraform-state writer; network, identity, storage, permissions and runtime resource configuration |
-| Backend API matrix | Release each of the six APIs separately, wait for readiness and verify its immutable image digest |
-| Realtime handler matrix | Release connections, publisher and reconciler separately |
-| Research task matrix | Register worker and numerical runner revisions separately |
-| Release research workflow | Wait for both task jobs, then update the desired graph with exact task revision ARNs |
-| Configure alerts | Configure the private SNS recipient separately |
-| Publish frontend | Generate runtime configuration, upload assets and invalidate CloudFront after component releases succeed |
-| Verify deployment | Check API and frontend availability and publish the frontend link |
-
-Terraform retains the existing `application.tfstate` key and provisions initial runtime resources, but ignores subsequent Lambda image changes, ECS container definitions and state-machine definitions. Component jobs own those releases from desired templates exported by Terraform. They do not perform parallel Terraform applies or use `-target`. IAM allows Step Functions to run revisions only within the environment's two task families; the released workflow pins full revision ARNs. Already-running Standard executions retain their prior graph. There is no automatic rollback across the whole application; API releases record previous digests and a failed task job prevents the workflow/frontend release.
-
-Artifacts contain configuration, commit/environment metadata, immutable image references and task receipts, never API keys or email values. Digest, commit and environment validation reject mismatched release inputs. Artifacts are retained for seven days and support rerunning failed jobs; rerun the entire workflow if artifacts have expired or build inputs have changed. The existing application state is retained after a partial apply; do not delete it to recover a failed deployment.
-
-Browser sign-in also requires unauthenticated preflight routes at the same path specificity as each protected `ANY` route. API Gateway must accept `OPTIONS` without a JWT before the browser can send the authenticated request; actual API methods remain JWT-protected. `scripts/verify_cors.py` checks every service prefix and the projects root during deployment, then confirms an unauthenticated identity GET is rejected. The frontend skips identity checks for a signed-out visitor, exchanges a callback only once, validates the identity-token response and displays sign-in failures instead of silently returning to the landing page.
-
-The deployment fixes use a DynamoDB **gateway** endpoint with a private-subnet route and an explicit runner security-group prefix-list allowance. The deployment role also requires account-level `logs:DescribeLogGroups`, while log mutation permissions remain scoped to the environment. Lambda receives AWS's built-in `AWS_REGION`; only ECS templates explicitly set that variable.
-
-Cognito sign-up is invitation-only. After the first deployment, an administrator creates a user with the new user-pool ID output:
-
-```sh
-aws cognito-idp admin-create-user --user-pool-id YOUR_NEW_POOL_ID --username YOUR_EMAIL --user-attributes Name=email,Value=YOUR_EMAIL Name=email_verified,Value=true
-```
-
-The invitation lets you establish your password and access the deployed frontend through Cognito's hosted sign-in. Until bootstrap and GitHub environment settings are configured, merging alone cannot create AWS credentials for GitHub Actions.
-
-## Checks
-
-```sh
-.venv/bin/ruff check apis packages workers scripts tests
-.venv/bin/pytest -q
-npm --prefix frontend run build
-terraform fmt -check -recursive infra
-terraform -chdir=infra/environments init -backend=false
-terraform -chdir=infra/environments validate
-terraform -chdir=infra/bootstrap init -backend=false
-terraform -chdir=infra/bootstrap validate
-```
-
-Tests cover numerical timing/overlapping cohorts, missing holdings, non-comparable modified results, atomic event cursors, shared cache hits, leases, immutable revisions, private uploads, API service boundaries, authorization, workflow cancellation and AWS-store parity using Moto. Cloud credentials, actual model behavior, source entitlements and a real AWS deployment require separate integration verification.
-
-See [architecture](docs/paper-replication-architecture.md) for the full target design and [implementation status](docs/implementation-status.md) for what is executable versus planned.
-
-Universe resolution accepts explicit exchange definitions without a ticker list. The catalog is checked before provider discovery. Bigdata MCP screens current reference listings with pagination; Yahoo screening is a fallback. Snapshots record observed identifiers, provider timestamps, unknown historical membership and truncation. At most 100 identifiers are sampled deterministically by identifier hash, independently of returns. Original-period and later-period Yahoo histories are separate candidates. Coverage checks identify complete security-month windows including formation/holding lookback; the planner can select only a defensible covered sample, retaining all caveats. Empty discovery now triggers at most three discovery attempts with planner feedback, rather than silently ending before replanning. Live data activity shows MCP calls, universe resolution, coverage, skips, failed acquisitions and decisions. Historical membership, delisted coverage and original result comparability are never inferred from available prices.
+Deployment commands live in GitHub Actions; AWS resource definitions live in Terraform.
+See [deployment setup](docs/deployment.md) for required OIDC roles and GitHub settings.
+No replacement resources were deployed during this refactor. Cloud login/model access
+and container builds still need deployment validation; local tests do not establish them.

@@ -1,0 +1,4 @@
+# Test and build dependencies. Run pip from the repository root.
+# Dependency versions remain defined in each project's pyproject.toml.
+-e ./packages[test]
+-e ./services/paper_replication[runtime]

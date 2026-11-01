@@ -1,55 +1,60 @@
-name: Validate paper replication
+name: CI
 on:
   pull_request:
-    branches: [dev, main]
-  workflow_call:
-  workflow_dispatch:
+  push:
+    branches-ignore: [dev, prod]
 permissions:
   contents: read
 jobs:
-  backend:
+  catalog:
+    runs-on: ubuntu-latest
+    outputs:
+      workflows: ${{ steps.catalog.outputs.workflows }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: catalog
+        uses: ./.github/actions/workflow-catalog
+  verify-platform:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install -c requirements.lock -e '.[dev]'
-      - run: ruff check apis packages workers scripts tests
-      - run: pytest -q
-  frontend:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+      - run: pip install -e 'packages[test]'
+      - run: python -m pytest packages .github/tests
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - run: npm ci && npm test && npm run build
-        working-directory: frontend
-  infrastructure:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+          node-version: '24'
+      - run: npm --prefix apps/web ci
+      - run: npm --prefix apps/web test
+      - run: npm --prefix apps/web run build
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: '1.15.7'
+          terraform_version: 1.15.7
       - run: terraform fmt -check -recursive infra
-      - run: terraform -chdir=infra/environments init -backend=false && terraform -chdir=infra/environments validate
-      - run: terraform -chdir=infra/bootstrap init -backend=false && terraform -chdir=infra/bootstrap validate
-
-  images:
-    runs-on: ubuntu-latest
+      - run: terraform -chdir=infra/foundation init -backend=false && terraform -chdir=infra/foundation validate
+      - run: terraform -chdir=infra/foundation test
+      - run: terraform -chdir=infra/auth init -backend=false && terraform -chdir=infra/auth validate
+      - run: terraform -chdir=infra/github init -backend=false && terraform -chdir=infra/github validate
+      - run: terraform -chdir=infra/workflows init -backend=false && terraform -chdir=infra/workflows validate
+  verify-workflow:
+    name: Test ${{ matrix.workflow.name }}
+    needs: catalog
     strategy:
+      fail-fast: false
       matrix:
-        target: [api, worker]
+        workflow: ${{ fromJSON(needs.catalog.outputs.workflows) }}
+    runs-on: ubuntu-latest
+    env:
+      WORKFLOW_ID: ${{ matrix.workflow.id }}
     steps:
       - uses: actions/checkout@v4
-      - name: Build deployable image
-        run: docker build --target ${{ matrix.target }} --tag jimmy-ci-${{ matrix.target }} .
-      - name: Verify installed service and worker packages
-        run: >-
-          docker run --rm --entrypoint python -e PAPERLAB_ROOT=/tmp/jimmy-ci
-          jimmy-ci-${{ matrix.target }}
-          -c "from apis.app import app; import paperlab.workflow; import workers.replication.main; assert app.routes"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -e packages -e "services/$WORKFLOW_ID" pytest
+      - name: Verify API imports with base dependencies
+        run: python -c 'import importlib, os; importlib.import_module(os.environ["WORKFLOW_ID"] + "_api")'
+      - run: pip install -e "services/$WORKFLOW_ID[runtime]"
+      - run: python -m pytest "services/$WORKFLOW_ID/tests"

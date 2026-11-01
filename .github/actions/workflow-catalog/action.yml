@@ -1,0 +1,47 @@
+name: Validate workflow registry
+description: Discover registered services for CI and deployment matrices.
+outputs:
+  workflows:
+    description: JSON array of registered workflows.
+    value: ${{ steps.catalog.outputs.workflows }}
+runs:
+  using: composite
+  steps:
+    - id: catalog
+      shell: bash
+      run: |
+        python - <<'PYTHON' >> "$GITHUB_OUTPUT"
+        import json
+        from pathlib import Path
+        import re
+
+        def validate_id(value):
+            if not isinstance(value, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,31}", value):
+                raise ValueError("Workflow ID must use lowercase letters, numbers and underscores (maximum 32 characters)")
+
+
+        def load_registry(root):
+            entries = json.loads((root / "workflows.json").read_text())["workflows"]
+            if not isinstance(entries, list) or not entries:
+                raise ValueError("Register at least one workflow")
+            ids, prefixes = set(), set()
+            for entry in entries:
+                if set(entry) != {"id", "name", "api_prefix", "requires_openai"}:
+                    raise ValueError("Workflow fields must be id, name, api_prefix and requires_openai")
+                validate_id(entry["id"])
+                if entry["api_prefix"] != "/api/" + entry["id"].replace("_", "-"):
+                    raise ValueError("API prefix must match the workflow ID")
+                if entry["id"] in ids or entry["api_prefix"] in prefixes:
+                    raise ValueError("Workflow IDs and API prefixes must be unique")
+                if not isinstance(entry["name"], str) or not entry["name"].strip() or not isinstance(entry["requires_openai"], bool):
+                    raise ValueError("Provide a workflow name and boolean requires_openai")
+                folder = root / "services" / entry["id"]
+                for name in ["pyproject.toml", "Dockerfile", "Dockerfile.api", f"src/{entry['id']}_api.py"]:
+                    if not (folder / name).is_file():
+                        raise ValueError(f"Missing workflow file: services/{entry['id']}/{name}")
+                ids.add(entry["id"]); prefixes.add(entry["api_prefix"])
+            return entries
+
+
+        print("workflows=" + json.dumps(load_registry(Path.cwd()), separators=(",", ":")))
+        PYTHON

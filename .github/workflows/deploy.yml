@@ -1,0 +1,237 @@
+name: Deploy environment
+on:
+  push:
+    branches: [dev, prod]
+defaults:
+  run:
+    shell: bash
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  provision-infrastructure:
+    name: Provision infrastructure
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name }}
+    outputs:
+      workflows: ${{ steps.catalog.outputs.workflows }}
+      state_bucket: ${{ steps.state.outputs.bucket }}
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      TF_VAR_environment: ${{ github.ref_name }}
+      TF_VAR_region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: catalog
+        uses: ./.github/actions/workflow-catalog
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ format('arn:aws:iam::{0}:role/jimmy-{1}-github-deploy', secrets.AWS_ACCOUNT_ID, github.ref_name) }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Ensure environment state bucket
+        id: state
+        env:
+          JIMMY_ENV: ${{ github.ref_name }}
+        run: |
+          case "$GITHUB_REF" in
+            refs/heads/dev|refs/heads/prod) test "$GITHUB_REF" = "refs/heads/$JIMMY_ENV" ;;
+            *) echo "State provisioning requires the matching dev/prod branch" >&2; exit 1 ;;
+          esac
+          account=$(aws sts get-caller-identity --query Account --output text)
+          test "$account" = "$AWS_ACCOUNT_ID"
+          bucket="jimmy-${JIMMY_ENV}-state-${account}"
+          error_file=$(mktemp)
+          trap 'rm -f "$error_file"' EXIT
+          if ! aws s3api head-bucket --bucket "$bucket" --expected-bucket-owner "$account" 2>"$error_file"; then
+            error=$(<"$error_file")
+            if [[ "$error" != *"(404)"* && "$error" != *"NoSuchBucket"* ]]; then
+              cat "$error_file" >&2
+              exit 1
+            fi
+            arguments=(--bucket "$bucket")
+            if [[ "$AWS_REGION" != "us-east-1" ]]; then
+              arguments+=(--create-bucket-configuration "LocationConstraint=$AWS_REGION")
+            fi
+            aws s3api create-bucket "${arguments[@]}"
+          fi
+          aws s3api put-bucket-versioning --bucket "$bucket" --versioning-configuration Status=Enabled
+          aws s3api put-public-access-block --bucket "$bucket" --public-access-block-configuration '{"BlockPublicAcls":true,"IgnorePublicAcls":true,"BlockPublicPolicy":true,"RestrictPublicBuckets":true}'
+          aws s3api put-bucket-encryption --bucket "$bucket" --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+          printf 'bucket=%s\n' "$bucket" >> "$GITHUB_OUTPUT"
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.7
+          terraform_wrapper: false
+      - name: Provision foundation
+        env:
+          STATE_BUCKET: ${{ steps.state.outputs.bucket }}
+          TF_VAR_openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          TF_VAR_openai_api_key_version: ${{ github.run_number }}
+        run: |
+          terraform -chdir=infra/foundation init -input=false -backend-config="bucket=$STATE_BUCKET" -backend-config="key=foundation/terraform.tfstate" -backend-config="region=$AWS_REGION" -backend-config="use_lockfile=true" -backend-config="encrypt=true"
+          terraform -chdir=infra/foundation validate
+          terraform -chdir=infra/foundation plan -input=false -out=foundation.tfplan
+          terraform -chdir=infra/foundation apply -input=false foundation.tfplan
+          terraform -chdir=infra/foundation output -json deployment > foundation.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: foundation-${{ github.sha }}
+          path: foundation.json
+          retention-days: 1
+          overwrite: true
+
+  provision-auth:
+    name: Provision auth
+    needs: provision-infrastructure
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name }}
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: foundation-${{ github.sha }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ format('arn:aws:iam::{0}:role/jimmy-{1}-github-deploy', secrets.AWS_ACCOUNT_ID, github.ref_name) }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.7
+          terraform_wrapper: false
+      - uses: ./.github/actions/deployment-config
+      - name: Provision Cognito and JWT authorizer
+        env:
+          STATE_BUCKET: ${{ needs.provision-infrastructure.outputs.state_bucket }}
+        run: |
+          terraform -chdir=infra/auth init -input=false -backend-config="bucket=$STATE_BUCKET" -backend-config="key=auth/terraform.tfstate" -backend-config="region=$AWS_REGION" -backend-config="use_lockfile=true" -backend-config="encrypt=true"
+          terraform -chdir=infra/auth validate
+          terraform -chdir=infra/auth plan -input=false -out=auth.tfplan
+          terraform -chdir=infra/auth apply -input=false auth.tfplan
+          terraform -chdir=infra/auth output -json deployment > auth.json
+          jq -e --arg environment "$DEPLOY_ENV" '.environment == $environment' auth.json > /dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: auth-${{ github.sha }}
+          path: auth.json
+          retention-days: 1
+          overwrite: true
+
+  provision-workflows:
+    name: Provision ${{ matrix.workflow.name }}
+    needs: [provision-infrastructure, provision-auth]
+    strategy:
+      fail-fast: false
+      matrix:
+        workflow: ${{ fromJSON(needs.provision-infrastructure.outputs.workflows) }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name }}
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+      WORKFLOW_ID: ${{ matrix.workflow.id }}
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-6.1-sol' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: foundation-${{ github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: auth-${{ github.sha }}
+      - uses: ./.github/actions/deployment-config
+        with:
+          auth: 'true'
+          workflow: ${{ matrix.workflow.id }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ format('arn:aws:iam::{0}:role/jimmy-{1}-github-deploy', secrets.AWS_ACCOUNT_ID, github.ref_name) }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: aws-actions/amazon-ecr-login@v2
+      - name: Verify OpenAI configuration
+        if: ${{ matrix.workflow.requires_openai }}
+        run: |
+          test -n "$OPENAI_MODEL"
+      - name: Publish workflow runtime image
+        id: runtime-image
+        uses: ./.github/actions/build-image
+        with:
+          workflow: ${{ matrix.workflow.id }}
+          component: runtime
+      - name: Publish workflow API image
+        id: api-image
+        uses: ./.github/actions/build-image
+        with:
+          workflow: ${{ matrix.workflow.id }}
+          component: api
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.7
+          terraform_wrapper: false
+      - name: Provision workflow
+        env:
+          TF_VAR_api_image: ${{ steps.api-image.outputs.image_uri }}
+          TF_VAR_runtime_image: ${{ steps.runtime-image.outputs.image_uri }}
+          TF_VAR_openai_model: ${{ env.OPENAI_MODEL }}
+          STATE_BUCKET: ${{ needs.provision-infrastructure.outputs.state_bucket }}
+        run: |
+          terraform -chdir=infra/workflows init -input=false -backend-config="bucket=$STATE_BUCKET" -backend-config="key=workflows/$WORKFLOW_ID/terraform.tfstate" -backend-config="region=$AWS_REGION" -backend-config="use_lockfile=true" -backend-config="encrypt=true"
+          terraform -chdir=infra/workflows validate
+          terraform -chdir=infra/workflows plan -input=false -out=workflow.tfplan
+          terraform -chdir=infra/workflows apply -input=false workflow.tfplan
+
+  provision-frontend:
+    name: Provision frontend
+    needs: [provision-infrastructure, provision-auth, provision-workflows]
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name }}
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: foundation-${{ github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: auth-${{ github.sha }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ format('arn:aws:iam::{0}:role/jimmy-{1}-github-deploy', secrets.AWS_ACCOUNT_ID, github.ref_name) }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm --prefix apps/web ci
+      - run: npm --prefix apps/web run build
+      - uses: ./.github/actions/deployment-config
+        with:
+          auth: 'true'
+      - name: Configure frontend
+        run: |
+          jq -n --slurpfile foundation foundation.json --slurpfile auth auth.json '{apiUrl:$foundation[0].api_url, clientId:$auth[0].cognito_client_id, cognitoDomain:$auth[0].cognito_domain, workflows:$foundation[0].workflows}' > apps/web/dist/config.json
+      - name: Publish frontend
+        run: |
+          bucket=$(jq -er '.frontend_bucket' foundation.json)
+          distribution=$(jq -er '.distribution_id' foundation.json)
+          aws s3 sync apps/web/dist/ "s3://$bucket/" --cache-control no-cache
+          aws cloudfront create-invalidation --distribution-id "$distribution" --paths '/*'
+      - name: Verify endpoints
+        run: |
+          api_url=$(jq -er '.api_url' foundation.json)
+          web_origin=$(jq -er '.web_origin' foundation.json)
+          client_id=$(jq -er '.cognito_client_id' auth.json)
+          while IFS= read -r prefix; do
+            curl --fail --silent --show-error --max-time 30 "$api_url$prefix/health" | jq -e '.status == "ok"'
+            status=$(curl --silent --show-error --max-time 30 --output /dev/null --write-out '%{http_code}' "$api_url$prefix/me")
+            test "$status" = 401
+          done < <(jq -r '.workflows[].api_prefix' foundation.json)
+          curl --fail --silent --show-error --max-time 30 "$web_origin/config.json" | jq -e --arg client_id "$client_id" '.clientId == $client_id'
