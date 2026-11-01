@@ -71,6 +71,15 @@ elif command == "terraform":
         sys.exit(1)
     if args[1:3] == ["state", "pull"]:
         print(os.environ["FOUNDATION_STATE"])
+    if args[1:3] == ["state", "list"] and os.getenv("MANAGED_RUNTIME_LOG"):
+        print("module.workflow.aws_cloudwatch_log_group.runtime")
+    if args[1:3] == ["show", "-json"]:
+        print(json.dumps({"values": {"root_module": {"child_modules": [{
+            "address": "module.workflow", "resources": [{
+                "address": "module.workflow.aws_bedrockagentcore_agent_runtime.runtime",
+                "values": {"agent_runtime_id": os.getenv("RUNTIME_ID", "jimmy_dev_paper_replication-doM7U04E4p")}
+            }]
+        }]}}}))
     if args[1] == "output":
         print(json.dumps({"environment": "dev", "runtime_arn": "arn:runtime"}))
 elif command == "curl":
@@ -251,7 +260,10 @@ def test_workflow_dependencies_state_and_guards_remain_isolated():
         assert prepare < apply
         key = "key=workflows/$WORKFLOW_ID/terraform.tfstate" if component == "workflows" else "key=auth/terraform.tfstate"
         assert key in steps[apply]["run"]
-        assert "-target" not in steps[apply]["run"]
+        # Runtime bootstrap is targeted only so its service-created log group
+        # can be adopted. The final plan must always reconcile the full root.
+        plans = [line for line in steps[apply]["run"].splitlines() if ' plan ' in line]
+        assert plans and '-target' not in plans[-1]
     assert not any("build-image" in s.get("uses", "") for s in jobs["provision-auth"]["steps"])
 
 
@@ -450,3 +462,43 @@ def test_unregistered_workflow_cannot_resolve_images(runner):
     assert result.returncode != 0
     assert calls() == []
     assert (folder / 'environment').read_text() == ''
+
+
+@pytest.mark.parametrize('managed', ['', '1'])
+def test_runtime_log_group_is_adopted_before_complete_workflow_plan(runner, managed):
+    _, execute, calls = runner
+    result = execute(step('provision-workflows', 'Provision workflow'),
+                     WORKFLOW_ID='paper_replication', MANAGED_RUNTIME_LOG=managed)
+    assert result.returncode == 0, result.stderr
+    commands = calls()
+    runtime_apply = next(i for i, c in enumerate(commands) if c[-1] == 'runtime.tfplan' and 'apply' in c)
+    complete_plan = next(i for i, c in enumerate(commands) if '-out=workflow.tfplan' in c)
+    imports = [(i, c) for i, c in enumerate(commands) if 'import' in c]
+    if managed:
+        assert not imports
+    else:
+        assert len(imports) == 1
+        index, command = imports[0]
+        assert runtime_apply < index < complete_plan
+        assert command[-2:] == ['module.workflow.aws_cloudwatch_log_group.runtime',
+                                '/aws/bedrock-agentcore/runtimes/jimmy_dev_paper_replication-doM7U04E4p-DEFAULT']
+    assert runtime_apply < complete_plan
+    assert commands[-1][-1] == 'workflow.tfplan'
+
+
+@pytest.mark.parametrize('runtime_id', ['jimmy_prod_paper_replication-abc123', 'unrelated-abc123', ''])
+def test_runtime_log_import_rejects_unexpected_ids(runner, runtime_id):
+    _, execute, calls = runner
+    result = execute(step('provision-workflows', 'Provision workflow'),
+                     WORKFLOW_ID='paper_replication', RUNTIME_ID=runtime_id)
+    assert result.returncode != 0
+    assert not any('import' in c or '-out=workflow.tfplan' in c for c in calls())
+
+
+@pytest.mark.parametrize('failure', ['plan', 'apply', 'show', 'state', 'import'])
+def test_runtime_adoption_failures_stop_workflow_provisioning(runner, failure):
+    _, execute, calls = runner
+    result = execute(step('provision-workflows', 'Provision workflow'),
+                     WORKFLOW_ID='paper_replication', FAIL_TERRAFORM=failure)
+    assert result.returncode != 0
+    assert not any('-out=workflow.tfplan' in c for c in calls())

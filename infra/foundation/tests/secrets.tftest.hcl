@@ -51,3 +51,19 @@ run "missing_github_key_blocks_deployment" {
   variables { openai_api_key = "" }
   expect_failures = [aws_secretsmanager_secret_version.openai[0]]
 }
+
+run "lambda_image_access_is_scoped_to_each_workflow_function" {
+  command = apply
+  assert {
+    condition     = length(aws_ecr_repository_policy.api) == length(local.workflows)
+    error_message = "Every workflow API requires a Lambda image retrieval policy."
+  }
+  assert {
+    condition = alltrue([for key, repo in aws_ecr_repository_policy.api :
+      jsondecode(repo.policy).Statement[0].Principal.Service == "lambda.amazonaws.com" &&
+      toset(jsondecode(repo.policy).Statement[0].Action) == toset(["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]) &&
+      jsondecode(repo.policy).Statement[0].Condition.ArnLike["aws:SourceArn"] == "arn:aws:lambda:us-east-1:123456789012:function:jimmy-dev-${replace(local.workflow_repositories[key].id, "_", "-")}-api"
+    ])
+    error_message = "Only the corresponding Lambda function may retrieve a workflow API image."
+  }
+}
