@@ -130,72 +130,16 @@ jobs:
           overwrite: true
 
   provision-workflows:
-    name: Provision ${{ matrix.workflow.name }}
+    name: Deploy ${{ matrix.workflow.name }}
     needs: [provision-infrastructure, provision-auth]
     strategy:
       fail-fast: false
       matrix:
         workflow: ${{ fromJSON(needs.provision-infrastructure.outputs.workflows) }}
-    runs-on: ubuntu-latest
-    environment: ${{ github.ref_name }}
-    env:
-      AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-1' }}
-      STATE_BUCKET: ${{ format('jimmy-{0}-state-{1}', github.ref_name, secrets.AWS_ACCOUNT_ID) }}
-      WORKFLOW_ID: ${{ matrix.workflow.id }}
-      OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-6.1-sol' }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: foundation-${{ github.sha }}
-      - uses: actions/download-artifact@v4
-        with:
-          name: auth-${{ github.sha }}
-      - uses: ./.github/actions/deployment-config
-        with:
-          auth: 'true'
-          workflow: ${{ matrix.workflow.id }}
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ format('arn:aws:iam::{0}:role/jimmy-{1}-github-deploy', secrets.AWS_ACCOUNT_ID, github.ref_name) }}
-          aws-region: ${{ env.AWS_REGION }}
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: aws-actions/amazon-ecr-login@v2
-      - name: Verify OpenAI configuration
-        if: ${{ matrix.workflow.requires_openai }}
-        run: |
-          test -n "$OPENAI_MODEL"
-      - name: Publish workflow runtime image
-        id: runtime-image
-        uses: ./.github/actions/build-image
-        with:
-          workflow: ${{ matrix.workflow.id }}
-          component: runtime
-      - name: Publish workflow API image
-        id: api-image
-        uses: ./.github/actions/build-image
-        with:
-          workflow: ${{ matrix.workflow.id }}
-          component: api
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.15.7
-          terraform_wrapper: false
-      - name: Provision workflow
-        env:
-          TF_VAR_api_image: ${{ steps.api-image.outputs.image_uri }}
-          TF_VAR_runtime_image: ${{ steps.runtime-image.outputs.image_uri }}
-          TF_VAR_openai_model: ${{ env.OPENAI_MODEL }}
-        run: |
-          if ! [[ "$STATE_BUCKET" =~ ^jimmy-(dev|prod)-state-[0-9]{12}$ ]]; then
-            echo "Invalid Terraform state bucket configuration" >&2
-            exit 1
-          fi
-          terraform -chdir=infra/workflows init -input=false -backend-config="bucket=$STATE_BUCKET" -backend-config="key=workflows/$WORKFLOW_ID/terraform.tfstate" -backend-config="region=$AWS_REGION" -backend-config="use_lockfile=true" -backend-config="encrypt=true"
-          terraform -chdir=infra/workflows validate
-          terraform -chdir=infra/workflows plan -input=false -out=workflow.tfplan
-          terraform -chdir=infra/workflows apply -input=false workflow.tfplan
+    uses: ./.github/workflows/deploy-workflow.yml
+    with:
+      workflow: ${{ toJSON(matrix.workflow) }}
+    secrets: inherit
 
   provision-frontend:
     name: Provision frontend

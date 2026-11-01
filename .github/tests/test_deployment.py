@@ -16,8 +16,24 @@ def workflow():
     return yaml.load((ROOT / ".github/workflows/deploy.yml").read_text(), Loader=yaml.BaseLoader)
 
 
+def workflow_deployment():
+    return yaml.load((ROOT / ".github/workflows/deploy-workflow.yml").read_text(), Loader=yaml.BaseLoader)
+
+
+def job_definition(name):
+    if name == 'provision-workflows':
+        return workflow_deployment()['jobs']['provision-workflow']
+    if name == 'publish-images':
+        return workflow_deployment()['jobs']['publish-images']
+    return workflow()['jobs'][name]
+
+
+def concrete_jobs():
+    return [job for job in workflow()['jobs'].values() if 'steps' in job] + list(workflow_deployment()['jobs'].values())
+
+
 def step(job, name):
-    return next(s for s in workflow()["jobs"][job]["steps"] if s.get("name") == name)["run"]
+    return next(s for s in job_definition(job)["steps"] if s.get("name") == name)["run"]
 
 
 def action(name):
@@ -46,7 +62,8 @@ if command == "aws":
     elif args[:2] == ["s3api", "head-bucket"] and os.getenv("HEAD_RESULT") != "exists":
         print("(403) Forbidden" if os.getenv("HEAD_RESULT") == "denied" else "(404) Not Found", file=sys.stderr)
         sys.exit(254)
-    elif args[:2] == ["ecr", "describe-images"] and os.getenv("IMAGE_RESULT") != "exists":
+    elif args[:2] == ["ecr", "describe-images"] and (os.getenv("IMAGE_RESULT") != "exists" or
+            (os.getenv("MISSING_IMAGE_COMPONENT") and args[args.index("--repository-name") + 1].endswith("-" + os.environ["MISSING_IMAGE_COMPONENT"]))):
         print("AccessDeniedException" if os.getenv("IMAGE_RESULT") == "denied" else "ImageNotFoundException", file=sys.stderr)
         sys.exit(254)
 elif command == "terraform":
@@ -226,7 +243,7 @@ def test_workflow_dependencies_state_and_guards_remain_isolated():
     assert "provision-workflows" in jobs["provision-frontend"]["needs"]
     assert "fromJSON" in jobs["provision-workflows"]["strategy"]["matrix"]["workflow"]
     for job_name, component in [("provision-auth", "auth"), ("provision-workflows", "workflows")]:
-        job = jobs[job_name]
+        job = job_definition(job_name)
         assert job["environment"] == "${{ github.ref_name }}"
         steps = job["steps"]
         prepare = next(i for i, s in enumerate(steps) if s.get("uses") == "./.github/actions/deployment-config")
@@ -239,7 +256,7 @@ def test_workflow_dependencies_state_and_guards_remain_isolated():
 
 
 def test_embedded_shell_has_valid_syntax():
-    sources = [s["run"] for job in workflow()["jobs"].values() for s in job["steps"] if "run" in s]
+    sources = [s["run"] for job in concrete_jobs() for s in job["steps"] if "run" in s]
     sources += [action("deployment-config"), action("build-image"), action("recover-foundation")]
     for source in sources:
         result = subprocess.run(["bash", "-n"], input=source, capture_output=True, text=True)
@@ -253,7 +270,7 @@ def test_foundation_receives_github_key_only_as_ephemeral_terraform_input():
     assert provision['env']['TF_VAR_openai_api_key'] == '${{ secrets.OPENAI_API_KEY }}'
     assert provision['env']['TF_VAR_openai_api_key_version'] == '${{ github.run_number }}'
     assert 'openai_api_key' not in provision['run']
-    for job in jobs.values():
+    for job in concrete_jobs():
         assume = next(s for s in job['steps'] if s.get('uses') == 'aws-actions/configure-aws-credentials@v4')
         assert 'secrets.AWS_ACCOUNT_ID' in assume['with']['role-to-assume']
         assert 'jimmy-{1}-github-deploy' in assume['with']['role-to-assume']
@@ -345,7 +362,7 @@ def test_backend_bucket_is_derived_in_each_job_without_cross_job_secret_outputs(
     assert set(jobs['provision-infrastructure']['outputs']) == {'workflows'}
     expected = "${{ format('jimmy-{0}-state-{1}', github.ref_name, secrets.AWS_ACCOUNT_ID) }}"
     for name in ['provision-infrastructure', 'provision-auth', 'provision-workflows']:
-        job = jobs[name]
+        job = job_definition(name)
         assert job['env']['STATE_BUCKET'] == expected
         # A step override must not replace the job's value with a skipped output.
         assert not any('STATE_BUCKET' in step.get('env', {}) for step in job['steps'])
@@ -373,3 +390,63 @@ def test_auth_initialization_uses_the_job_bucket_when_upstream_outputs_are_absen
     assert result.returncode == 0, result.stderr
     init = next(c for c in calls() if c[0] == 'terraform' and c[2] == 'init')
     assert '-backend-config=bucket=jimmy-dev-state-123456789012' in init
+
+
+def test_each_workflow_has_an_independent_publish_then_provision_chain():
+    caller = workflow()['jobs']['provision-workflows']
+    assert caller['uses'] == './.github/workflows/deploy-workflow.yml'
+    assert caller['secrets'] == 'inherit'
+    assert caller['with']['workflow'] == '${{ toJSON(matrix.workflow) }}'
+    assert caller['strategy']['fail-fast'] == 'false'
+    called = workflow_deployment()
+    assert set(called['on']) == {'workflow_call'}
+    assert set(called['jobs']) == {'publish-images', 'provision-workflow'}
+    publisher, provisioner = called['jobs']['publish-images'], called['jobs']['provision-workflow']
+    assert provisioner['needs'] == 'publish-images'
+    assert 'needs' not in publisher
+    assert 'outputs' not in publisher
+    assert publisher['environment'] == provisioner['environment'] == '${{ github.ref_name }}'
+    components = [s['with']['component'] for s in publisher['steps'] if s.get('uses') == './.github/actions/build-image']
+    assert components == ['api', 'runtime']
+    assert not any('terraform' in s.get('run', '') for s in publisher['steps'])
+    assert not any('build-image' in s.get('uses', '') or s.get('uses', '').startswith('docker/')
+                   for s in provisioner['steps'])
+    resolve = next(i for i, s in enumerate(provisioner['steps']) if s.get('name') == 'Resolve published workflow images')
+    apply = next(i for i, s in enumerate(provisioner['steps']) if s.get('name') == 'Provision workflow')
+    assert resolve < apply
+
+
+@pytest.mark.parametrize('workflow_id', ['paper_replication', 'second_flow'])
+def test_provisioning_resolves_both_images_for_its_workflow_and_commit(runner, workflow_id):
+    folder, execute, calls = runner
+    result = execute(step('provision-workflows', 'Resolve published workflow images'),
+                     WORKFLOW_ID=workflow_id, IMAGE_RESULT='exists')
+    assert result.returncode == 0, result.stderr
+    repositories = [c[c.index('--repository-name') + 1] for c in calls()]
+    name = workflow_id.replace('_', '-')
+    assert repositories == [f'jimmy-dev-{name}-api', f'jimmy-dev-{name}-runtime']
+    assert all(c[c.index('--image-ids') + 1] == 'imageTag=commit123' for c in calls())
+    values = dict(line.split('=', 1) for line in (folder / 'environment').read_text().splitlines())
+    assert values == {
+        'TF_VAR_api_image': f'registry.example/jimmy-dev-{name}-api:commit123',
+        'TF_VAR_runtime_image': f'registry.example/jimmy-dev-{name}-runtime:commit123',
+    }
+
+
+@pytest.mark.parametrize('component', ['api', 'runtime'])
+def test_provisioning_cannot_resolve_a_partial_image_publish(runner, component):
+    folder, execute, calls = runner
+    result = execute(step('provision-workflows', 'Resolve published workflow images'),
+                     WORKFLOW_ID='paper_replication', IMAGE_RESULT='exists', MISSING_IMAGE_COMPONENT=component)
+    assert result.returncode != 0
+    assert (folder / 'environment').read_text() == ''
+    assert not any(c[0] == 'terraform' for c in calls())
+
+
+def test_unregistered_workflow_cannot_resolve_images(runner):
+    folder, execute, calls = runner
+    result = execute(step('provision-workflows', 'Resolve published workflow images'),
+                     WORKFLOW_ID='unregistered', IMAGE_RESULT='exists')
+    assert result.returncode != 0
+    assert calls() == []
+    assert (folder / 'environment').read_text() == ''

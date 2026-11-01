@@ -80,9 +80,9 @@ branches to require reviewed merges and passing CI. PRs never deploy; there is n
 manual deployment trigger.
 
 Infrastructure is provisioned first, then Cognito. A matrix job named for each
-registered workflow builds its two ARM64 images and applies the reusable deployment
-module using state key `workflows/<id>/terraform.tfstate`. Workflows deploy independently
-in parallel. Frontend publishing waits for all workflow jobs to succeed and verifies
+registered workflow calls a reusable two-job deployment: publish its API/runtime
+ARM64 images, then provision the workflow using state key
+`workflows/<id>/terraform.tfstate`. Workflows deploy independently in parallel. Frontend publishing waits for all workflow jobs to succeed and verifies
 each registered API's health/authentication.
 
 Deployment commands live in GitHub Actions; AWS resource definitions live in Terraform.
