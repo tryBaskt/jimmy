@@ -4,49 +4,13 @@ from datetime import datetime, timezone
 from hashlib import sha256
 from io import BytesIO
 from pathlib import Path
-import warnings
 
 import httpx
 import numpy as np
 import pandas as pd
-import yfinance as yf
+from tools.yahoo_finance import YFinanceClient
 
 from models import DatasetSpec, ExperimentSpec
-
-
-class YFinanceClient:
-    def get_stock_prices_over_time(self, symbols, start_datetime, end_datetime, timeframe="1d"):
-        aliases = {"1D": "1d", "1H": "1h", "1Min": "1m", "5Min": "5m"}
-        interval = aliases.get(timeframe, timeframe.lower())
-        if interval not in {"1d", "1h", "1m", "5m"}:
-            raise ValueError("Unsupported Yahoo interval")
-        if start_datetime >= end_datetime or not symbols:
-            raise ValueError("Supply symbols and a nonempty date range")
-        with warnings.catch_warnings():
-            # Yahoo's internal inplace operations emit hundreds of pandas 3.1 notices.
-            warnings.filterwarnings("ignore", category=getattr(pd.errors, "Pandas4Warning", FutureWarning),
-                                    module=r"yfinance(\..*)?")
-            raw = yf.download(
-                symbols, start=start_datetime, end=end_datetime, interval=interval,
-                auto_adjust=True, progress=False, threads=False, group_by="column", timeout=30,
-            )
-        if raw is None or raw.empty:
-            raise ValueError("Yahoo returned no prices for this request")
-        if isinstance(raw.columns, pd.MultiIndex):
-            level = next((i for i in range(raw.columns.nlevels)
-                          if "Close" in raw.columns.get_level_values(i)), None)
-            if level is None:
-                raise ValueError("Yahoo returned no Close field")
-            close = raw.xs("Close", axis=1, level=level)
-        else:
-            close = raw[["Close"]].rename(columns={"Close": symbols[0]})
-        close.columns = close.columns.astype(str)
-        close = close.reindex(columns=symbols).apply(pd.to_numeric, errors="coerce")
-        close.index = pd.to_datetime(close.index).tz_localize(None).normalize()
-        close = close.loc[~close.index.duplicated()].sort_index()
-        close = close.where(np.isfinite(close) & (close > 0))
-        close.index.name = "date"
-        return close
 
 
 def monthly_returns(prices: pd.DataFrame, end) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -157,26 +121,34 @@ def read_returns(path: str) -> pd.DataFrame:
     return frame
 
 
-def quality_check(acquisition: dict, experiments: list[ExperimentSpec]) -> dict:
+def quality_check(acquisition: dict, experiments: list[ExperimentSpec], *, check_evaluation_dates=False) -> dict:
     issues = []
     if not acquisition.get("verified_available"):
         return {"usable": False, "issues": [acquisition.get("error", "No observed data")]}
     matrix = read_returns(acquisition["returns_path"])
-    supported = [e for e in experiments if e.kind == "paper" and e.method != "unsupported"]
+    supported = [e for e in experiments if e.method != "unsupported"]
     if not supported:
-        issues.append("No paper experiment has an implemented method")
+        issues.append("No requested experiment has an implemented method")
+    complete = matrix.notna().all(axis=1)
+    groups = (~complete).cumsum()
+    runs = complete.groupby(groups).sum()
+    window = matrix.index[complete & (groups == runs.idxmax())] if len(runs) else matrix.index[:0]
     for experiment in supported:
         minimum = experiment.quantiles if experiment.method == "cross_sectional_momentum" else 1
-        complete = matrix.notna().all(axis=1)
-        groups = (~complete).cumsum()
-        longest = int(complete.groupby(groups).sum().max()) if len(matrix) else 0
-        needed = experiment.formation_months + experiment.skip_months + experiment.holding_months + 12
-        if matrix.shape[1] < minimum or longest < needed:
+        warmup = (0 if experiment.method == "buy_and_hold"
+                  else experiment.formation_months + experiment.skip_months + experiment.holding_months - 1)
+        needed = warmup + 12
+        if matrix.shape[1] < minimum or len(window) < needed:
             issues.append(f"{experiment.id}: need {minimum} assets and {needed} contiguous complete months; "
-                          f"got {matrix.shape[1]} assets and {longest} months")
-    complete = matrix.notna().all(axis=1)
-    runs = complete.groupby((~complete).cumsum()).sum()
-    window = matrix.index[complete & ((~complete).cumsum() == runs.idxmax())] if len(runs) else []
+                          f"got {matrix.shape[1]} assets and {len(window)} months")
+        elif check_evaluation_dates:
+            eligible = window[warmup:]
+            if experiment.start:
+                eligible = eligible[eligible >= pd.Timestamp(experiment.start)]
+            if experiment.end:
+                eligible = eligible[eligible < pd.Timestamp(experiment.end)]
+            if len(eligible) < 12:
+                issues.append(f"{experiment.id}: fewer than 12 months in the selected evaluation period after warmup")
     return {"usable": not issues, "issues": issues,
             "common_start": str(window[0].date()) if len(window) else None,
             "common_end": str(window[-1].date()) if len(window) else None,

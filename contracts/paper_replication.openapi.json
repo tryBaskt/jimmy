@@ -335,10 +335,10 @@
           },
           "data_attempts": {
             "type": "integer",
-            "maximum": 5.0,
+            "maximum": 4.0,
             "minimum": 1.0,
             "title": "Data Attempts",
-            "default": 3
+            "default": 4
           },
           "workers": {
             "type": "integer",

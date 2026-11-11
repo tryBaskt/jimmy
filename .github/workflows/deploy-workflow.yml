@@ -56,6 +56,7 @@ jobs:
       STATE_BUCKET: ${{ format('jimmy-{0}-state-{1}', github.ref_name, secrets.AWS_ACCOUNT_ID) }}
       WORKFLOW_ID: ${{ fromJSON(inputs.workflow).id }}
       OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-6.1-sol' }}
+      RESEARCH_ASSISTANT_MODEL: ${{ vars.RESEARCH_ASSISTANT_MODEL || 'gpt-5-mini' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -86,10 +87,11 @@ jobs:
           terraform_wrapper: false
       - name: Verify OpenAI configuration
         if: ${{ fromJSON(inputs.workflow).requires_openai }}
-        run: test -n "$OPENAI_MODEL"
+        run: test -n "$OPENAI_MODEL" && test -n "$RESEARCH_ASSISTANT_MODEL"
       - name: Provision workflow
         env:
           TF_VAR_openai_model: ${{ env.OPENAI_MODEL }}
+          TF_VAR_research_assistant_model: ${{ env.RESEARCH_ASSISTANT_MODEL }}
         run: |
           if ! [[ "$STATE_BUCKET" =~ ^jimmy-(dev|prod)-state-[0-9]{12}$ ]]; then
             echo "Invalid Terraform state bucket configuration" >&2

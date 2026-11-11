@@ -5,6 +5,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+MAX_DATA_ATTEMPTS = 4
+MAX_DATA_REQUESTS_PER_ROUND = 4
+
 
 class Contract(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -82,13 +85,19 @@ class ResearchPlan(Contract):
     limitations: list[str]
 
 
+class InvestigationPlan(ResearchPlan):
+    extrapolations: list[ExperimentSpec] = Field(max_length=5)
+    alternative_datasets: list[DatasetSpec] = Field(max_length=MAX_DATA_REQUESTS_PER_ROUND - 1)
+
+
 class DataDecision(Contract):
     action: Literal["accept", "retry", "stop"]
     reason: str
-    dataset: DatasetSpec
+    selected_candidate: int | None = Field(ge=1, le=MAX_DATA_ATTEMPTS * MAX_DATA_REQUESTS_PER_ROUND)
+    requests: list[DatasetSpec] = Field(max_length=MAX_DATA_REQUESTS_PER_ROUND)
     deviations: list[str]
-    evaluation_start: date | None = Field(default=None, description="Chosen evaluation start, excluding formation warmup")
-    evaluation_end: date | None = Field(default=None, description="Exclusive chosen evaluation end")
+    evaluation_start: date | None = Field(description="Chosen evaluation start, excluding formation warmup")
+    evaluation_end: date | None = Field(description="Exclusive chosen evaluation end")
 
     @model_validator(mode="after")
     def ordered_dates(self):
@@ -97,6 +106,18 @@ class DataDecision(Contract):
         return self
 
 
-class ExperimentSuite(Contract):
-    experiments: list[ExperimentSpec] = Field(min_length=1, max_length=12)
+class ExperimentAdjustment(Contract):
+    id: str
+    start: date | None
+    end: date | None
+    formation_months: int = Field(ge=1, le=60)
+    holding_months: int = Field(ge=1, le=60)
+    skip_months: int = Field(ge=0, le=12)
+    quantiles: int = Field(ge=2, le=20)
+    reason: str = Field(min_length=1)
+
+
+class ExperimentRevision(Contract):
+    selected_candidate: int | None = Field(ge=1, le=MAX_DATA_ATTEMPTS * MAX_DATA_REQUESTS_PER_ROUND)
+    experiments: list[ExperimentAdjustment] = Field(max_length=13)
     rationale: str

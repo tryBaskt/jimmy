@@ -3,9 +3,8 @@ import json
 
 import httpx
 import pytest
-from openai import OpenAI
 
-from agents import ResearchAgents
+import workflow
 from models import DatasetSpec
 from settings import configure_openai
 
@@ -18,52 +17,81 @@ def response(text, status="completed", refusal=False):
                 "id": "msg_test", "role": "assistant", "status": "completed", "content": [content]}]}
 
 
-def agents_with_responses(tmp_path, outputs):
+def model_with_responses(outputs, model="gpt-6.1-sol"):
     calls = []
     def handle(request):
         assert request.url.path == "/v1/responses"
         calls.append(json.loads(request.content))
         return httpx.Response(200, json=outputs[min(len(calls) - 1, len(outputs) - 1)])
-    client = OpenAI(api_key="offline-test-key", max_retries=0,
-                    http_client=httpx.Client(transport=httpx.MockTransport(handle)))
-    return ResearchAgents("gpt-6.1-sol", "", tmp_path, client=client), calls
+    client = httpx.Client(transport=httpx.MockTransport(handle))
+    return workflow.chat_model(model, max_tokens=12000, http_client=client), calls
 
 
 def test_structured_output_validates_and_retries_with_explicit_budget(tmp_path):
     good = {"name": "Prices", "source": "yfinance", "symbols": ["AAPL"], "start": "2000-01-01",
             "end": "2020-01-01", "csv_url": None, "rationale": "Test", "known_differences": []}
-    agents, calls = agents_with_responses(tmp_path, [response("{}"), response(json.dumps(good))])
-    assert agents.structured(DatasetSpec, "Test", {}, "plan").symbols == ["AAPL"]
+    model, calls = model_with_responses([response("{}"), response(json.dumps(good))])
+    assert workflow.structured(model, tmp_path, DatasetSpec, "Test", {}, "plan").symbols == ["AAPL"]
     assert len(calls) == 2
     for call in calls:
         assert call["max_output_tokens"] == 12000
         assert call["store"] is False
         assert call["text"]["format"]["type"] == "json_schema"
         assert call["text"]["format"]["strict"] is True
-    assert "Correct the previous invalid output" in calls[1]["instructions"]
+    assert "Correct the previous invalid output" in json.dumps(calls[1]["input"])
     assert (tmp_path / "plan_2.json").exists()
 
 
 @pytest.mark.parametrize("output", [response("", refusal=True), response("{}", status="incomplete")])
 def test_unusable_structured_output_is_bounded(tmp_path, output):
-    agents, calls = agents_with_responses(tmp_path, [output])
+    model, calls = model_with_responses([output])
     with pytest.raises(ValueError, match="did not produce valid"):
-        agents.structured(DatasetSpec, "Test", {}, "plan")
+        workflow.structured(model, tmp_path, DatasetSpec, "Test", {}, "plan")
     assert len(calls) == 2
 
 
 def test_assessment_uses_openai_response_text(tmp_path):
-    agents, calls = agents_with_responses(tmp_path, [response("Evidence assessment")])
-    assert agents.interpret({"results": []}) == "Evidence assessment"
+    model, calls = model_with_responses([response("Evidence assessment")])
+    assert workflow.write_assessment(model, tmp_path, {"results": []}) == "Evidence assessment"
     assert calls[0]["max_output_tokens"] == 7000
     assert calls[0]["store"] is False
     assert (tmp_path / "report_response.json").exists()
 
 
 def test_incomplete_assessment_fails(tmp_path):
-    agents, _ = agents_with_responses(tmp_path, [response("Partial", status="incomplete")])
+    model, _ = model_with_responses([response("Partial", status="incomplete")])
     with pytest.raises(RuntimeError, match="did not complete"):
-        agents.interpret({})
+        workflow.write_assessment(model, tmp_path, {})
+
+
+def test_research_assistant_calls_only_its_assigned_tool(tmp_path, monkeypatch):
+    tool_call = {"type": "function_call", "name": "collect_data", "arguments": "{}",
+                 "call_id": "call_test", "id": "fc_test", "status": "completed"}
+    output = response("unused") | {"model": "gpt-5-mini", "output": [tool_call]}
+    model, calls = model_with_responses([output], "gpt-5-mini")
+    fetched = []
+
+    def acquire(spec, folder, local_csv):
+        fetched.append((spec.symbols, folder, local_csv))
+        return {"verified_available": True}
+
+    monkeypatch.setattr(workflow, "acquire", acquire)
+    dataset = DatasetSpec(name="Prices", source="yfinance", symbols=["AAPL"],
+                          start="2000-01-01", end="2020-01-01", csv_url=None,
+                          rationale="Test", known_differences=[])
+    assert workflow.collect_candidate(model, dataset, tmp_path) == {"verified_available": True}
+    assert fetched == [(["AAPL"], tmp_path, None)]
+    assert len(calls) == 1
+    assert calls[0]["model"] == "gpt-5-mini"
+    assert calls[0]["tool_choice"] == {"type": "function", "name": "collect_data"}
+    assert [tool["name"] for tool in calls[0]["tools"]] == ["collect_data"]
+    assert calls[0]["store"] is False
+
+
+@pytest.fixture(autouse=True)
+def offline_api_key(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "offline-test-key")
+    monkeypatch.delenv("RESEARCH_ASSISTANT_MODEL", raising=False)
 
 
 @pytest.fixture

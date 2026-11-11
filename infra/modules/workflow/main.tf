@@ -36,7 +36,11 @@ resource "aws_bedrockagentcore_agent_runtime" "runtime" {
   # IAM/SigV4 inbound auth is the default; only the API role can invoke it.
   # PUBLIC provides outbound internet for Yahoo; it does not disable IAM authentication.
   network_configuration { network_mode = "PUBLIC" }
-  environment_variables = merge({ JIMMY_WORKSPACE = "/tmp/jimmy" }, var.workflow.requires_openai ? { OPENAI_MODEL = var.openai_model, OPENAI_API_KEY_SECRET_ARN = var.openai_api_key_secret_arn } : {})
+  environment_variables = merge({ JIMMY_WORKSPACE = "/tmp/jimmy" }, var.workflow.requires_openai ? {
+    OPENAI_MODEL              = var.openai_model
+    RESEARCH_ASSISTANT_MODEL  = var.research_assistant_model
+    OPENAI_API_KEY_SECRET_ARN = var.openai_api_key_secret_arn
+  } : {})
   lifecycle_configuration {
     idle_runtime_session_timeout = 900
     max_lifetime                 = 28800

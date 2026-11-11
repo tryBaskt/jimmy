@@ -19,6 +19,7 @@ from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from pydantic import BaseModel, ConfigDict, Field
 
 from artifacts import RunStore, read_json
+from models import MAX_DATA_ATTEMPTS
 from settings import configure_openai
 
 store = RunStore(Path(os.getenv("JIMMY_WORKSPACE", "/tmp/jimmy")))
@@ -51,7 +52,7 @@ app = BedrockAgentCoreApp(lifespan=lifespan)
 class Options(BaseModel):
     model_config = ConfigDict(extra="forbid")
     extrapolations: int = Field(3, ge=0, le=5)
-    data_attempts: int = Field(3, ge=1, le=5)
+    data_attempts: int = Field(MAX_DATA_ATTEMPTS, ge=1, le=MAX_DATA_ATTEMPTS)
     workers: int = Field(4, ge=1, le=8)
     symbols: str = Field("", max_length=1000, pattern=r"^[A-Za-z0-9.,^= _-]*$")
 
@@ -105,7 +106,7 @@ def invoke(payload):
                 log = (store.jobs / f"{run_id}.log").open("w")
                 try:
                     process = subprocess.Popen(
-                        [sys.executable, "-m", "runner", run_id, json.dumps(options.model_dump())],
+                        [sys.executable, "-m", "workflow", run_id, json.dumps(options.model_dump())],
                         stdout=log, stderr=subprocess.STDOUT,
                     )
                 except Exception:

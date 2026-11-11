@@ -9,6 +9,7 @@ variable "workflow" { type = object({ id = string, name = string, api_prefix = s
 variable "api_image" { type = string }
 variable "runtime_image" { type = string }
 variable "openai_model" { type = string }
+variable "research_assistant_model" { type = string }
 variable "openai_api_key_secret_arn" { type = string }
 locals {
   prefix         = "jimmy-${var.foundation.environment}-${replace(var.workflow.id, "_", "-")}"

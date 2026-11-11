@@ -7,9 +7,10 @@ import pytest
 
 import workflow as main
 import market_data
-from agents import check_citations
+from tools import yahoo_finance
+from workflow import check_citations
 from backtesting import build_weights, evaluate, run_experiment
-from models import DataDecision, DatasetSpec, ExperimentSpec, ExperimentSuite, ResearchPlan
+from models import DataDecision, DatasetSpec, ExperimentRevision, ExperimentSpec, InvestigationPlan, ResearchPlan
 from market_data import monthly_returns, quality_check, validate_returns
 
 
@@ -122,7 +123,7 @@ def test_yahoo_close_shapes_and_adjustment(monkeypatch, columns):
     def download(*args, **kwargs):
         calls.append(kwargs)
         return raw
-    monkeypatch.setattr(market_data.yf, "download", download)
+    monkeypatch.setattr(yahoo_finance.yf, "download", download)
     result = market_data.YFinanceClient().get_stock_prices_over_time(["A"], "2020-01-01", "2020-02-01", "1D")
     assert list(result.columns) == ["A"]
     assert calls[0]["auto_adjust"] is True
@@ -188,87 +189,94 @@ def test_unsupported_method_visible(tmp_path):
     assert "not implemented" in result["error"]
 
 
-class FakeAgents:
-    def __init__(self, decisions=None):
+def decision(action="accept", candidate=1, requests=(), reason="Fixture coverage passes", **kwargs):
+    return DataDecision(action=action, selected_candidate=candidate, requests=list(requests),
+                        reason=reason, deviations=["Test sample"],
+                        **({"evaluation_start": None, "evaluation_end": None} | kwargs))
+
+
+def failed_experiment(spec, *_):
+    return {"id": spec.id, "spec": spec.model_dump(mode="json"), "status": "failed",
+            "error": "Fixture demonstrates visible failures"}
+
+
+class FakeInvestigator:
+    def __init__(self, decisions=None, *, alternatives=(), collect=None, execute=failed_experiment, revision=None):
         self.decisions = decisions or []
         self.reviews = 0
+        self.alternatives = list(alternatives)
+        self.delegate_collection = collect
+        self.delegate_experiment = execute
+        self.revision = revision
 
-    def plan(self, *args):
-        return plan()
+    def plan(self, pages, today, overrides, maximum):
+        return InvestigationPlan(**plan().model_dump(), alternative_datasets=self.alternatives,
+                                 extrapolations=[experiment(id="extra_cost", kind="extrapolation", fees_bps=10)][:maximum])
 
-    def search(self, *args):
-        return {"notes": "Mocked discovery, no network used", "sources": {}, "status": "completed"}
-
-    def review_data(self, *args):
-        i = self.reviews
+    def review_data(self, plan, candidates, history, remaining, today):
         self.reviews += 1
-        return self.decisions[i] if self.decisions else DataDecision(
-            action="accept", reason="Fixture coverage passes", dataset=dataset(), deviations=["Test sample"])
+        return self.decisions[self.reviews - 1] if self.decisions else decision()
 
-    def extrapolate(self, *args):
-        return ExperimentSuite(experiments=[experiment(id="extra_cost", kind="extrapolation", fees_bps=10)],
-                               rationale="Cost sensitivity")
+    def revise_experiments(self, *args):
+        return self.revision or ExperimentRevision(selected_candidate=None, experiments=[], rationale="Insufficient data")
 
     def interpret(self, evidence):
-        assert len(evidence["results"]) >= 1
         return "Interpretation based on fixture results only."
 
 
-def runtime(tmp_path, agents):
-    return main.Runtime(agents, tmp_path, "2026-10-29", {}, 2, 1, web_search=True)
+def runtime(tmp_path, investigator, monkeypatch):
+    monkeypatch.setattr(main, "plan_research", lambda model, folder, *args: investigator.plan(*args))
+    monkeypatch.setattr(main, "review_collected_data", lambda model, folder, *args: investigator.review_data(*args))
+    monkeypatch.setattr(main, "revise_experiments", lambda model, folder, *args: investigator.revise_experiments(*args))
+    monkeypatch.setattr(main, "write_assessment", lambda model, folder, evidence: investigator.interpret(evidence))
+    monkeypatch.setattr(main, "collect_candidate", lambda model, *args: investigator.delegate_collection(*args))
+    monkeypatch.setattr(main, "run_assigned_experiment", lambda model, *args: investigator.delegate_experiment(*args))
+    return main.Runtime(None, None, tmp_path, "2026-10-29", {}, 4, 1)
 
 
-def test_graph_parallel_fanout_and_join(monkeypatch, tmp_path):
+def test_graph_parallel_acquisition_and_experiment_fanout(monkeypatch, tmp_path):
     acquisition = acquired(tmp_path)
     monkeypatch.setattr(main, "read_paper", lambda path: ["Winners outperform losers"])
     collectors = Barrier(2)
     experiments = Barrier(2)
+
     def fetch(*args):
         collectors.wait(timeout=10)
-        return acquisition
-    agents = FakeAgents()
-    def search(*args):
-        collectors.wait(timeout=10)
-        return {"notes": "Fixture", "sources": {}}
-    agents.search = search
-    monkeypatch.setattr(main, "acquire", fetch)
-    def execute(spec, acquisition, folder):
+        return dict(acquisition)
+
+    def execute(spec, *_):
         experiments.wait(timeout=10)
-        return {"id": spec.id, "spec": spec.model_dump(mode="json"), "status": "failed",
-                "error": "Fixture demonstrates visible failures"}
-    monkeypatch.setattr(main, "run_experiment", execute)
-    result = main.create_workflow(runtime(tmp_path, agents)).invoke({"paper_path": "fixture.pdf"},
-                                                                 {"max_concurrency": 4})
+        return failed_experiment(spec)
+
+    investigator = FakeInvestigator(alternatives=[dataset(start="2000-02-01")], collect=fetch, execute=execute)
+    result = main.create_workflow(runtime(tmp_path, investigator, monkeypatch)).invoke({"paper_path": "fixture.pdf"},
+                                                                       {"max_concurrency": 4})
+    assert len(result["acquisitions"]) == 2
+    assert {c["candidate_id"] for c in result["acquisitions"]} == {1, 2}
     assert len(result["results"]) == 2
-    assert agents.reviews == 1
-    assert Path(result["report_path"]).is_file()
+    assert all(r["error"] == "Fixture demonstrates visible failures" for r in result["results"])
+    assert investigator.reviews == 1
     assert "original claim not evaluated" in Path(result["report_path"]).read_text().lower()
 
 
 def test_graph_data_retry_then_accept(monkeypatch, tmp_path):
     acquisition = acquired(tmp_path)
     later = dataset(name="Substitute", start="2000-02-01")
-    decisions = [DataDecision(action="retry", reason="Use substitute", dataset=later, deviations=["New dates"]),
-                 DataDecision(action="accept", reason="Fetched", dataset=later, deviations=["New dates"])]
-    agents = FakeAgents(decisions)
-    def fetch(spec, *args):
-        return acquisition | {"requested": spec.model_dump(mode="json")}
+    decisions = [decision("retry", requests=[later], reason="Use substitute"), decision(candidate=5)]
+    investigator = FakeInvestigator(decisions, collect=lambda *_: dict(acquisition))
     monkeypatch.setattr(main, "read_paper", lambda path: ["Winners outperform losers"])
-    monkeypatch.setattr(main, "acquire", fetch)
-    monkeypatch.setattr(main, "run_experiment", lambda spec, *_: {
-        "id": spec.id, "spec": spec.model_dump(mode="json"), "status": "failed", "error": "Fixture"})
-    result = main.create_workflow(runtime(tmp_path, agents)).invoke({"paper_path": "fixture.pdf"})
+    result = main.create_workflow(runtime(tmp_path, investigator, monkeypatch)).invoke({"paper_path": "fixture.pdf"})
     assert len(result["acquisitions"]) == 2
     assert result["attempt"] == 2
+    assert result["acquisition"]["candidate_id"] == 5
     assert len(result["results"]) == 2
 
 
 def test_graph_rejects_acceptance_of_failed_data(monkeypatch, tmp_path):
     monkeypatch.setattr(main, "read_paper", lambda path: ["Winners outperform losers"])
-    monkeypatch.setattr(main, "acquire", lambda *args: {
-        "requested": dataset().model_dump(mode="json"), "source": "fixture",
-        "verified_available": False, "error": "No data"})
-    result = main.create_workflow(runtime(tmp_path, FakeAgents())).invoke({"paper_path": "fixture.pdf"})
+    investigator = FakeInvestigator(collect=lambda *_: {
+        "source": "fixture", "verified_available": False, "error": "No data"})
+    result = main.create_workflow(runtime(tmp_path, investigator, monkeypatch)).invoke({"paper_path": "fixture.pdf"})
     assert result["decision"]["action"] == "stop"
     assert not result.get("results")
     assert Path(result["report_path"]).is_file()
@@ -283,35 +291,50 @@ def test_exact_comparison_never_inferred_from_same_metric(tmp_path):
 
 def test_selected_evaluation_period_excludes_warmup(monkeypatch, tmp_path):
     acquisition = acquired(tmp_path)
-    agents = FakeAgents([DataDecision(action="accept", reason="Explicit period", dataset=dataset(),
-                                      deviations=[], evaluation_start="2001-01-01", evaluation_end="2003-01-01")])
+    selected = decision(reason="Explicit period", evaluation_start="2001-01-01", evaluation_end="2003-01-01")
     monkeypatch.setattr(main, "read_paper", lambda path: ["Winners outperform losers"])
-    monkeypatch.setattr(main, "acquire", lambda *args: acquisition)
     captured = []
+
     def execute(spec, *_):
         captured.append(spec)
-        return {"id": spec.id, "spec": spec.model_dump(mode="json"), "status": "failed", "error": "Fixture"}
-    monkeypatch.setattr(main, "run_experiment", execute)
-    result = main.create_workflow(runtime(tmp_path, agents)).invoke({"paper_path": "fixture.pdf"})
+        return failed_experiment(spec)
+
+    investigator = FakeInvestigator([selected], collect=lambda *_: dict(acquisition), execute=execute)
+    result = main.create_workflow(runtime(tmp_path, investigator, monkeypatch)).invoke({"paper_path": "fixture.pdf"})
     paper = next(spec for spec in captured if spec.kind == "paper")
     assert str(paper.start) == "2001-01-01"
     assert str(paper.end) == "2003-01-01"
     assert "excluding warmup" in Path(result["report_path"]).read_text()
 
 
-def test_retry_limit_is_enforced(monkeypatch, tmp_path):
-    later = dataset(start="2000-02-01")
-    agents = FakeAgents([DataDecision(action="retry", reason="Change data", dataset=later, deviations=[])])
+def test_four_round_limit_and_revision_use_earlier_collected_data(monkeypatch, tmp_path):
+    acquisition = acquired(tmp_path)
+    retries = [decision("retry", requests=[dataset(start=f"2000-0{i}-01")]) for i in range(2, 6)]
+    revision = ExperimentRevision(selected_candidate=1, rationale="Use original coverage with a shorter lookback",
+        experiments=[dict(id="momentum", start=None, end=None, formation_months=1, holding_months=1,
+                          skip_months=0, quantiles=2, reason="Shorter lookback for available history")])
     monkeypatch.setattr(main, "read_paper", lambda path: ["Winners outperform losers"])
-    monkeypatch.setattr(main, "acquire", lambda *args: {
-        "requested": dataset().model_dump(mode="json"), "source": "fixture",
-        "verified_available": False, "error": "Unavailable"})
-    config = runtime(tmp_path, agents)
-    config.max_data_attempts = 1
+    original = plan()
+    original.experiments[0].formation_months = 60
+
+    def fetch(spec, *_):
+        if spec.start.month == 1:
+            return dict(acquisition)
+        return {"source": "fixture", "verified_available": False, "error": "Unavailable"}
+
+    investigator = FakeInvestigator(retries, collect=fetch, revision=revision)
+    investigator.plan = lambda *args: InvestigationPlan(**original.model_dump(), alternative_datasets=[], extrapolations=[])
+    config = runtime(tmp_path, investigator, monkeypatch)
+    config.max_data_attempts = 5
     result = main.create_workflow(config).invoke({"paper_path": "fixture.pdf"})
     assert result["decision"]["action"] == "stop"
     assert "limit reached" in result["decision"]["reason"]
-    assert agents.reviews == 1
+    assert investigator.reviews == 4
+    assert len(result["acquisitions"]) == 4
+    assert result["acquisition"]["candidate_id"] == 1
+    assert result["plan"]["experiments"][0]["formation_months"] == 60
+    assert result["results"][0]["spec"]["formation_months"] == 1
+    assert "Shorter lookback" in Path(result["report_path"]).read_text()
 
 
 def test_metadata_changes_do_not_trigger_another_download():

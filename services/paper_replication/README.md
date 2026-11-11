@@ -17,14 +17,23 @@ are built for Linux ARM64. The runtime role can pull its image, write its logs, 
 read the configured OpenAI key secret; it has no database or artifact-bucket permissions.
 Model inference uses OpenAI directly, while AgentCore provides hosting.
 
-Workflow stages:
+`workflow.py` is the child process entry point and defines the LangGraph workflow.
+It calls LangChain's `create_agent` directly for Principal Investigator decisions
+and for each Research Assistant assignment.
 
-1. Read PDF text and extract the main claim, methodology, page citations and paper tests.
-2. Download Yahoo adjusted prices or a validated public monthly-return CSV.
-3. Check availability and minimum usable coverage; allow bounded substitute/replan attempts.
-4. Freeze paper tests and exploratory robustness tests before seeing results.
-5. Run trusted experiment templates in parallel.
-6. Produce numerical tables and a planner assessment from saved evidence.
+1. The PI extracts page-grounded claims, plans the paper tests and exploratory
+   extrapolations, and requests data based on the experiments and their warmup needs.
+2. Research Assistants collect up to four distinct requests in parallel per round,
+   using Yahoo adjusted prices or validated public monthly-return CSVs. The PI
+   reviews the observed coverage, selects a candidate, or requests alternatives.
+   There are at most four rounds, and candidates from earlier rounds remain eligible.
+3. If needed, the PI revises the planned experiments to fit collected data. The graph
+   validates the revised coverage and freezes the executable suite before backtesting.
+4. Research Assistants run the assigned backtests in parallel. Each sees one tool
+   bound to its assignment. The PI reviews the completed results and writes the report.
+
+The Yahoo Finance and VectorBT adapters live in `packages/tools`. This service
+owns paper-specific data validation, numerical methods, and report formatting.
 
 Supported templates are monthly cross-sectional momentum, time-series momentum and
 buy-and-hold. Tests cover signal timing, cohort construction, missing observations,
@@ -34,7 +43,7 @@ and simplified historical membership cannot establish an exact replication. Expl
 tests are not untouched holdouts; multiplicity corrections and arbitrary author code are
 not implemented.
 
-`agents.py` uses OpenAI Responses with explicit output-token limits. Structured model
+`workflow.py` uses OpenAI Responses with explicit output-token limits. Structured model
 outputs go through a Pydantic schema and citation checks. Web search is disabled until a
 real provider is configured; the service does not fabricate discovery results.
 
@@ -53,7 +62,8 @@ dependencies are in the `runtime` extra.
 
 The runtime runs on AgentCore and resolves `OPENAI_API_KEY_SECRET_ARN` from Secrets
 Manager. `OPENAI_MODEL` defaults to `gpt-6.1-sol`. The API uses Cognito authentication
-and IAM-signed AgentCore requests. There is no local application mode.
+and IAM-signed AgentCore requests. `RESEARCH_ASSISTANT_MODEL` defaults to `gpt-5-mini`.
+There is no local application mode.
 
 All Python modules live directly in `src/`. The AgentCore server starts with
-`python -m runtime`; it starts graph execution with `python -m runner`.
+`python -m runtime`; it starts graph execution with `python -m workflow`.
