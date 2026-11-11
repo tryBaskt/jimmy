@@ -8,7 +8,7 @@ from pypdf import PdfReader
 from starlette.concurrency import run_in_threadpool
 
 from security.workflow_auth import current_user
-from jobs import invoke
+from jobs import invoke, runtime_configured
 from http_utils.app import create_app
 from harness.models import MAX_DATA_ATTEMPTS
 
@@ -75,5 +75,6 @@ def series(run_id: UUID, experiment_id: str, owner: str = Depends(current_user))
     return invoke(str(run_id), owner, "series", experiment=experiment_id)["rows"]
 
 
-app = create_app(router, workflow_id="paper_replication", title="Paper replication")
+app = create_app(router, workflow_id="paper_replication", title="Paper replication",
+                 runtime_configured=runtime_configured)
 handler = Mangum(app, lifespan="off")

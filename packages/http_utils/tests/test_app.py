@@ -15,11 +15,12 @@ def isolated_environment(monkeypatch):
     monkeypatch.setenv('COGNITO_CLIENT_ID', 'client')
 
 
-def app(workflow_id='first_flow'):
+def app(workflow_id='first_flow', runtime_configured=None):
     router = APIRouter()
     router.add_api_route('/result', lambda: {'workflow': workflow_id})
     router.add_api_route('/submit', lambda: {'ok': True}, methods=['POST'])
-    return create_app(router, workflow_id=workflow_id, title='Example workflow')
+    return create_app(router, workflow_id=workflow_id, title='Example workflow',
+                      runtime_configured=runtime_configured)
 
 
 def test_health_is_public_but_identity_and_business_routes_require_auth():
@@ -33,9 +34,8 @@ def test_health_is_public_but_identity_and_business_routes_require_auth():
 
 
 def test_health_reports_runtime_configuration(monkeypatch):
-    monkeypatch.setenv('AGENTCORE_RUNTIME_ARN', 'arn:example')
     monkeypatch.setenv('OPENAI_MODEL', 'test-model')
-    with TestClient(app()) as client:
+    with TestClient(app(runtime_configured=lambda: True)) as client:
         health = client.get('/api/first-flow/health').json()
         assert health['runtime_configured'] is True
         assert health['model'] == 'test-model'

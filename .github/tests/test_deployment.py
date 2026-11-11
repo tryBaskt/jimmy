@@ -75,7 +75,7 @@ elif command == "terraform":
         print(json.dumps({"environment": "dev", "cluster_arn": "arn:cluster"}))
 elif command == "curl":
     if args[-1].endswith("/health"):
-        print('{"status":"ok"}')
+        print(json.dumps({"status": "ok", "runtime_configured": os.getenv("RUNTIME_CONFIGURED", "true") == "true"}))
     elif args[-1].endswith("/me"):
         print(os.getenv("ANONYMOUS_STATUS", "401"), end="")
     else:
@@ -225,12 +225,15 @@ def test_frontend_configuration_uses_environment_auth_outputs(runner):
     }
 
 
-@pytest.mark.parametrize("status,client,success", [("401", "dev-client", True), ("200", "dev-client", False),
-                                                 ("401", "other-client", False)])
-def test_frontend_smoke_checks_authentication_and_configuration(runner, status, client, success):
+@pytest.mark.parametrize("status,client,configured,success", [
+    ("401", "dev-client", "true", True), ("200", "dev-client", "true", False),
+    ("401", "other-client", "true", False), ("401", "dev-client", "false", False),
+])
+def test_frontend_smoke_checks_authentication_and_configuration(runner, status, client, configured, success):
     folder, execute, _ = runner
     (folder / "auth.json").write_text('{"cognito_client_id":"dev-client"}')
-    result = execute(step("provision-frontend", "Verify endpoints"), ANONYMOUS_STATUS=status, PUBLISHED_CLIENT=client)
+    result = execute(step("provision-frontend", "Verify endpoints"), ANONYMOUS_STATUS=status,
+                     PUBLISHED_CLIENT=client, RUNTIME_CONFIGURED=configured)
     assert (result.returncode == 0) == success, result.stderr
 
 

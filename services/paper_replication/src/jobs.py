@@ -16,6 +16,13 @@ import storage
 from harness.models import MAX_DATA_ATTEMPTS
 
 
+def runtime_configured() -> bool:
+    return all(os.getenv(name, "").strip() for name in (
+        "RUN_BUCKET", "ECS_CLUSTER_ARN", "ECS_TASK_DEFINITION_ARN",
+        "ECS_SUBNET_IDS", "ECS_SECURITY_GROUP_ID",
+    ))
+
+
 class Options(BaseModel):
     model_config = ConfigDict(extra="forbid")
     extrapolations: int = Field(3, ge=0, le=5)

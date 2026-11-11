@@ -184,7 +184,8 @@
       "Resource": [
         "arn:aws:logs:${region}:${account_id}:log-group:/aws/lambda/jimmy-${environment}-*",
         "arn:aws:logs:${region}:${account_id}:log-group:/aws/bedrock-agentcore/runtimes/jimmy_${environment}_*",
-        "arn:aws:logs:${region}:${account_id}:log-group:/aws/ecs/jimmy-${environment}-*-worker"
+        "arn:aws:logs:${region}:${account_id}:log-group:/aws/ecs/jimmy-${environment}-*-worker",
+        "arn:aws:logs:${region}:${account_id}:log-group:/aws/ecs/jimmy-${environment}-*-worker:*"
       ]
     },
     {
