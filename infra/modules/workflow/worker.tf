@@ -29,6 +29,43 @@ resource "aws_subnet" "worker" {
   tags       = { Name = "${local.prefix}-worker" }
 }
 
+data "aws_availability_zones" "worker" {
+  state = "available"
+  filter {
+    name   = "zone-type"
+    values = ["availability-zone"]
+  }
+}
+
+locals {
+  # AWS Fargate does not support ARM64 in this physical zone. Zone names vary by account.
+  arm_worker_zones = sort([for zone in data.aws_availability_zones.worker.zone_ids : zone if zone != "use1-az3"])
+  worker_zones     = slice(local.arm_worker_zones, 0, min(2, length(local.arm_worker_zones)))
+}
+
+resource "aws_vpc_ipv4_cidr_block_association" "worker_capacity" {
+  vpc_id = aws_vpc.worker.id
+  # The original subnet occupies the whole primary CIDR. Add address space in place.
+  cidr_block = "10.42.1.0/24"
+  lifecycle {
+    precondition {
+      condition     = length(local.worker_zones) == 2
+      error_message = "The Fargate worker needs two ARM64-supported Availability Zones."
+    }
+  }
+}
+
+resource "aws_subnet" "worker_capacity" {
+  for_each = { for index, zone in local.worker_zones : zone => index }
+
+  vpc_id               = aws_vpc.worker.id
+  availability_zone_id = each.key
+  cidr_block           = cidrsubnet(aws_vpc_ipv4_cidr_block_association.worker_capacity.cidr_block, 1, each.value)
+  tags                 = { Name = "${local.prefix}-worker-${each.key}" }
+
+  depends_on = [aws_vpc_ipv4_cidr_block_association.worker_capacity]
+}
+
 resource "aws_internet_gateway" "worker" {
   vpc_id = aws_vpc.worker.id
   tags   = { Name = "${local.prefix}-worker" }
@@ -45,6 +82,13 @@ resource "aws_route_table" "worker" {
 
 resource "aws_route_table_association" "worker" {
   subnet_id      = aws_subnet.worker.id
+  route_table_id = aws_route_table.worker.id
+}
+
+resource "aws_route_table_association" "worker_capacity" {
+  for_each = aws_subnet.worker_capacity
+
+  subnet_id      = each.value.id
   route_table_id = aws_route_table.worker.id
 }
 

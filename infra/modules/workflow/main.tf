@@ -41,14 +41,14 @@ resource "aws_lambda_function" "api" {
       RUN_BUCKET              = aws_s3_bucket.runs.bucket
       ECS_CLUSTER_ARN         = aws_ecs_cluster.worker.arn
       ECS_TASK_DEFINITION_ARN = aws_ecs_task_definition.worker.arn
-      ECS_SUBNET_IDS          = aws_subnet.worker.id
+      ECS_SUBNET_IDS          = join(",", [for subnet in aws_subnet.worker_capacity : subnet.id])
       ECS_SECURITY_GROUP_ID   = aws_security_group.worker.id
       COGNITO_ISSUER          = var.auth.cognito_issuer
       COGNITO_CLIENT_ID       = var.auth.cognito_client_id
       WEB_ORIGINS             = var.foundation.web_origin
     }
   }
-  depends_on = [aws_iam_role_policy.api, aws_route_table_association.worker, aws_s3_bucket_public_access_block.runs]
+  depends_on = [aws_iam_role_policy.api, aws_route_table_association.worker_capacity, aws_s3_bucket_public_access_block.runs]
 }
 
 resource "aws_apigatewayv2_integration" "api" {
