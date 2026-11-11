@@ -13,11 +13,13 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest", "PyYAML"]
+research-tools = ["yfinance>=1.8,<2", "vectorbt>=0.28,<0.29", "plotly>=5,<7", "pandas>=2.2,<3", "numpy>=2,<2.3"]
 
 [tool.setuptools]
-packages = ["http_utils", "clients", "security"]
+packages = ["http_utils", "clients", "security", "tools"]
 
 [tool.setuptools.package-dir]
 http_utils = "http_utils/src"
 clients = "clients/src"
 security = "security/src"
+tools = "tools/src"

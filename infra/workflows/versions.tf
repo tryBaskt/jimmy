@@ -20,6 +20,10 @@ variable "openai_model" {
   type    = string
   default = "gpt-6.1-sol"
 }
+variable "research_assistant_model" {
+  type    = string
+  default = "gpt-5-mini"
+}
 provider "aws" {
   region = var.foundation.region
   default_tags { tags = { Application = "jimmy", Environment = var.foundation.environment, Workflow = var.workflow.id, ManagedBy = "terraform" } }
@@ -32,6 +36,7 @@ module "workflow" {
   api_image                 = var.api_image
   runtime_image             = var.runtime_image
   openai_model              = var.openai_model
+  research_assistant_model  = var.research_assistant_model
   openai_api_key_secret_arn = var.foundation.openai_api_key_secret_arn
 }
 output "deployment" { value = module.workflow.deployment }

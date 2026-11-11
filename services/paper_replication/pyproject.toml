@@ -7,7 +7,14 @@ version = "0.1.0"
 requires-python = ">=3.12,<3.14"
 dependencies = ["jimmy-shared==0.1.0", "pydantic>=2.10,<3", "pypdf>=6,<7", "python-multipart>=0.0.20,<1"]
 [project.optional-dependencies]
-runtime = ["bedrock-agentcore>=1.0,<2", "openai>=2,<4", "langgraph>=1,<2", "yfinance>=0.2.65,<2", "vectorbt>=0.28,<0.29", "plotly>=5,<7", "pandas>=2.2,<3", "numpy>=2,<2.3", "statsmodels>=0.14,<1"]
+runtime = [
+  "bedrock-agentcore>=1.0,<2",
+  "langchain>=1.4.10,<2",
+  "langchain-openai>=1.7.4,<2",
+  "langgraph>=1.2.12,<2",
+  "jimmy-shared[research-tools]==0.1.0",
+  "pandas>=2.2,<3", "numpy>=2,<2.3", "statsmodels>=0.14,<1",
+]
 [tool.setuptools]
 package-dir = {"" = "src"}
-py-modules = ["agents", "artifacts", "backtesting", "market_data", "models", "paper_replication_api", "reporting", "runner", "runtime", "settings", "workflow"]
+py-modules = ["artifacts", "backtesting", "market_data", "models", "paper_replication_api", "reporting", "runtime", "settings", "workflow"]

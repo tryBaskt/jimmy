@@ -8,10 +8,10 @@ Lambda adapter, which invokes that workflow's AgentCore runtime.
 workflows.json                       Registry used by CI, deployment and infrastructure
 services/paper_replication/
   src/paper_replication_api.py        Workflow-owned HTTP endpoints
-  src/                               Graph, agents, runtime, data and numerical modules
+  src/workflow.py                    LangChain agents and LangGraph orchestration
   Dockerfile.api                     API Lambda image
   Dockerfile                         AgentCore runtime image
-packages/                Shared auth, transport and app setup
+packages/                            Shared auth, transport, app setup and research tools
 infra/foundation/                    Gateway, hosting, repositories and shared log encryption
 infra/auth/                          Cognito and JWT authorizer
 infra/modules/workflow/              Reusable API + AgentCore deployment module
@@ -34,10 +34,11 @@ See [adding a workflow](docs/adding-a-workflow.md) for the ownership and executi
 
 ## Paper replication
 
-The planner extracts page-grounded claims, acquires actual observations, checks
-coverage, performs bounded data replanning, freezes experiments, runs trusted
-numerical templates in parallel, and produces an evidence-based report. Unsupported
-methods and missing data stay visible. Model-generated Python is never executed.
+The Principal Investigator plans paper experiments and extrapolations from
+page-grounded claims. Research Assistants collect data in parallel across up to
+four rounds. The PI reviews coverage and revises experiments when needed, then
+the assistants run the frozen suite in parallel using trusted numerical templates.
+The PI writes the report from the resulting evidence.
 
 The frontend calls `/api/paper-replication/*`. Cognito provides sign-in, API Gateway
 checks JWTs, and the workflow API checks the user's identity and passes it to its
@@ -71,7 +72,8 @@ npm --prefix apps/web run build
 GitHub environments provide `AWS_ACCOUNT_ID`, `AWS_REGION`, and `OPENAI_API_KEY`
 secrets. Terraform creates the OpenAI secret and passes its ARN to AgentCore automatically.
 The dev deployment role is bootstrapped, so merge into `dev` to deploy. The runtime loads its key from Secrets Manager;
-it does not read `.env` files. `OPENAI_MODEL` defaults to `gpt-6.1-sol`.
+it does not read `.env` files. `OPENAI_MODEL` defaults to `gpt-6.1-sol` for the PI,
+and `RESEARCH_ASSISTANT_MODEL` defaults to `gpt-5-mini` for the assistants.
 
 ## Deployment
 

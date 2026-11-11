@@ -11,13 +11,15 @@ from starlette.concurrency import run_in_threadpool
 from security.workflow_auth import current_user
 from clients.agentcore_client import invoke
 from http_utils.app import create_app
+from models import MAX_DATA_ATTEMPTS
 
 router = APIRouter()
 
 
 @router.post("/runs", status_code=202)
 async def start(paper: UploadFile = File(...), extrapolations: int = Form(3, ge=0, le=5),
-                data_attempts: int = Form(3, ge=1, le=5), workers: int = Form(4, ge=1, le=8),
+                data_attempts: int = Form(MAX_DATA_ATTEMPTS, ge=1, le=MAX_DATA_ATTEMPTS),
+                workers: int = Form(4, ge=1, le=8),
                 symbols: str = Form("", max_length=1000), run_id: UUID | None = Form(None),
                 owner: str = Depends(current_user)):
     try:

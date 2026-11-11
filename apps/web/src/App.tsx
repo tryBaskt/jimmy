@@ -29,7 +29,7 @@ function UploadPanel({ onCreated, keyReady }: { onCreated: (run: Run) => void; k
   const [advanced, setAdvanced] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [options, setOptions] = useState({ extrapolations: 3, data_attempts: 3, workers: 4, symbols: '' });
+  const [options, setOptions] = useState({ extrapolations: 3, data_attempts: 4, workers: 4, symbols: '' });
   function select(file?: File) {
     if (!file) return;
     if (!file.name.toLowerCase().endsWith('.pdf')) { setError('Please choose a PDF research paper.'); return; }
@@ -60,7 +60,7 @@ function UploadPanel({ onCreated, keyReady }: { onCreated: (run: Run) => void; k
     <div className="upload-footer"><span><ShieldCheck size={14} /> Results are temporary. Download reports before your research session expires.</span><button className="text-button" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}><Settings2 size={14} /> Run settings <ChevronDown size={13} className={advanced ? 'rotate' : ''} /></button></div>
     {advanced && <div className="settings-grid">
       <label>Exploratory experiments<select value={options.extrapolations} onChange={e => setOptions({ ...options, extrapolations: +e.target.value })}>{[0, 1, 2, 3, 4, 5].map(n => <option key={n}>{n}</option>)}</select></label>
-      <label>Data attempts<select value={options.data_attempts} onChange={e => setOptions({ ...options, data_attempts: +e.target.value })}>{[1, 2, 3, 4, 5].map(n => <option key={n}>{n}</option>)}</select></label>
+      <label>Data acquisition rounds<select value={options.data_attempts} onChange={e => setOptions({ ...options, data_attempts: +e.target.value })}>{[1, 2, 3, 4].map(n => <option key={n}>{n}</option>)}</select></label>
       <label>Parallel workers<select value={options.workers} onChange={e => setOptions({ ...options, workers: +e.target.value })}>{[1, 2, 3, 4, 6, 8].map(n => <option key={n}>{n}</option>)}</select></label>
       <label className="ticker-setting">Optional ticker universe<input placeholder="AAPL, MSFT, IBM…" value={options.symbols} onChange={e => setOptions({ ...options, symbols: e.target.value })} /></label>
     </div>}

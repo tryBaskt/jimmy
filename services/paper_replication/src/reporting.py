@@ -21,20 +21,21 @@ def render_report(state: dict, interpretation: str) -> str:
              f"Evidence: PDF page {plan['claim_citation']['page']}: “{plan['claim_citation']['quote']}”", "",
              plan["methodology"], "", "Original data requirements: " + plan["original_data_requirements"], "",
              "## Data acquisition and substitutions", ""]
-    planned_details = ["## Planned paper experiments and coverage", ""]
+    planned_details = ["## Original experiment plan and coverage", ""]
     executed_ids = {result["id"] for result in results}
-    for experiment in plan["experiments"]:
+    for experiment in plan["experiments"] + plan.get("extrapolations", []):
         status = "execution recorded below" if experiment["id"] in executed_ids else "not executed"
-        planned_details += [f"- **{experiment['name']}**: {status}; method={experiment['method']}."]
+        planned_details += [f"- **{experiment['name']}** ({experiment['kind']}): {status}, "
+                            f"method={experiment['method']}."]
         planned_details += [f"  - Methodology gap: {item}" for item in experiment["deviations"]]
         for expected in experiment["published"]:
             planned_details += [f"  - Published {expected['metric']}: {expected['value']} "
                                 f"(PDF page {expected['citation']['page']}: “{expected['citation']['quote']}”)."]
     planned_details += [""]
     lines[-2:-2] = planned_details
-    for i, attempt in enumerate(state.get("acquisitions", []), 1):
+    for attempt in state.get("acquisitions", []):
         request = attempt["requested"]
-        lines += [f"### Attempt {i}: {request['name']}", "",
+        lines += [f"### Round {attempt['round']}, candidate {attempt['candidate_id']}: {request['name']}", "",
                   f"Source: {attempt['source']}; requested {request['start']} to {request['end']} (exclusive).",
                   f"Availability verified by download: {attempt['verified_available']}.", "",
                   f"Symbols: {', '.join(request['symbols']) or 'CSV identifiers'}.", ""]
@@ -44,12 +45,17 @@ def render_report(state: dict, interpretation: str) -> str:
         lines += ["", "Coverage:", "", "```json", json.dumps(attempt.get("coverage", {}), indent=2), "```", ""]
         if attempt.get("sha256"):
             lines += [f"Snapshot SHA-256: `{attempt['sha256']}`", ""]
+        lines += [f"- Coverage issue: {issue}" for issue in attempt["quality"]["issues"]] + [""]
     for decision in state.get("decisions", []):
         lines += [f"Planner data decision: **{decision['action']}** — {decision['reason']}", ""]
         if decision.get("evaluation_start") or decision.get("evaluation_end"):
             lines += [f"Chosen evaluation period: {decision.get('evaluation_start')} to "
                       f"{decision.get('evaluation_end')} (exclusive end), excluding warmup.", ""]
         lines += [f"- {item}" for item in decision["deviations"]] + [""]
+    if state.get("acquisition"):
+        lines += [f"Dataset selected for backtests: candidate {state['acquisition']['candidate_id']}.", ""]
+    if state.get("revision"):
+        lines += ["### PI experiment revision", "", state["revision"]["rationale"], ""]
     for kind, title in [("paper", "Paper experiments (modified tests)"),
                         ("extrapolation", "Exploratory extrapolations")]:
         lines += [f"## {title}", "",
@@ -89,7 +95,7 @@ def render_report(state: dict, interpretation: str) -> str:
                           json.dumps(result["vectorbt"], indent=2), "```", ""]
             if result.get("vectorbt_error"):
                 lines += ["VectorBT diagnostic failed (gross calculation retained): " + result["vectorbt_error"], ""]
-    lines += ["## Planner assessment", "", interpretation, "", "## Conventions and limits", "",
+    lines += ["## Principal Investigator assessment", "", interpretation, "", "## Conventions and limits", "",
               "- Modified data and simplified methodology cannot establish an exact replication.",
               "- Cross-sectional momentum is +1 long / -1 short: a spread per dollar long, gross exposure 2. "
               "Compounded spread wealth is hypothetical, not an investable return guarantee.",
@@ -105,8 +111,4 @@ def render_report(state: dict, interpretation: str) -> str:
     lines += [f"- {item}" for item in plan["limitations"]] + [""]
     for error in state.get("warnings", []):
         lines += [f"- Workflow warning: {error}"]
-    lines += ["", "## Web data research", ""]
-    for web in state.get("web_history", []):
-        lines += [web.get("notes", ""), ""]
-        lines += [f"- [{title}]({url})" for url, title in web.get("sources", {}).items()] + [""]
     return "\n".join(lines)
