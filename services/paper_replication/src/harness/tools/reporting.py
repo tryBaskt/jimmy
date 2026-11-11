@@ -5,7 +5,9 @@ from pathlib import Path
 
 
 def save_json(path: Path, value):
-    path.write_text(json.dumps(value, indent=2, default=str, allow_nan=False))
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(value, indent=2, default=str, allow_nan=False))
+    temporary.replace(path)
 
 
 def render_report(state: dict, interpretation: str) -> str:

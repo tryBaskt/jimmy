@@ -24,6 +24,15 @@ variable "research_assistant_model" {
   type    = string
   default = "gpt-5-mini"
 }
+variable "pi_max_model_calls" {
+  description = "Model call budget for one Principal Investigator harness run."
+  type        = number
+  default     = 48
+  validation {
+    condition     = var.pi_max_model_calls >= 16 && var.pi_max_model_calls <= 128 && floor(var.pi_max_model_calls) == var.pi_max_model_calls
+    error_message = "The PI model call budget must be a whole number between 16 and 128."
+  }
+}
 provider "aws" {
   region = var.foundation.region
   default_tags { tags = { Application = "jimmy", Environment = var.foundation.environment, Workflow = var.workflow.id, ManagedBy = "terraform" } }
@@ -37,6 +46,7 @@ module "workflow" {
   runtime_image             = var.runtime_image
   openai_model              = var.openai_model
   research_assistant_model  = var.research_assistant_model
+  pi_max_model_calls        = var.pi_max_model_calls
   openai_api_key_secret_arn = var.foundation.openai_api_key_secret_arn
 }
 output "deployment" { value = module.workflow.deployment }

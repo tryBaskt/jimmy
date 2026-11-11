@@ -16,7 +16,9 @@
       ],
       "Resource": [
         "arn:aws:iam::${account_id}:role/jimmy-${environment}-*-api",
-        "arn:aws:iam::${account_id}:role/jimmy-${environment}-*-runtime"
+        "arn:aws:iam::${account_id}:role/jimmy-${environment}-*-runtime",
+        "arn:aws:iam::${account_id}:role/jimmy-${environment}-*-worker",
+        "arn:aws:iam::${account_id}:role/jimmy-${environment}-*-execution"
       ]
     },
     {
@@ -26,15 +28,11 @@
         "iam:PassRole"
       ],
       "Resource": [
-        "arn:aws:iam::${account_id}:role/jimmy-${environment}-*-api",
-        "arn:aws:iam::${account_id}:role/jimmy-${environment}-*-runtime"
+        "arn:aws:iam::${account_id}:role/jimmy-${environment}-*-api"
       ],
       "Condition": {
         "StringEquals": {
-          "iam:PassedToService": [
-            "lambda.amazonaws.com",
-            "bedrock-agentcore.amazonaws.com"
-          ]
+          "iam:PassedToService": "lambda.amazonaws.com"
         }
       }
     },
@@ -54,7 +52,8 @@
       ],
       "Resource": [
         "arn:aws:s3:::jimmy-${environment}-state-${account_id}",
-        "arn:aws:s3:::jimmy-${environment}-web-${account_id}"
+        "arn:aws:s3:::jimmy-${environment}-web-${account_id}",
+        "arn:aws:s3:::jimmy-${environment}-*-runs-${account_id}"
       ]
     },
     {
@@ -103,8 +102,12 @@
     {
       "Sid": "ApiRepositoryPolicies",
       "Effect": "Allow",
-      "Action": ["ecr:SetRepositoryPolicy"],
-      "Resource": ["arn:aws:ecr:${region}:${account_id}:repository/jimmy-${environment}-*-api"]
+      "Action": [
+        "ecr:SetRepositoryPolicy"
+      ],
+      "Resource": [
+        "arn:aws:ecr:${region}:${account_id}:repository/jimmy-${environment}-*-api"
+      ]
     },
     {
       "Sid": "RegistryLogin",
@@ -166,77 +169,6 @@
       "Resource": "*"
     },
     {
-      "Sid": "CreateRuntimes",
-      "Effect": "Allow",
-      "Action": [
-        "bedrock-agentcore:CreateAgentRuntime"
-      ],
-      "Resource": "*",
-      "Condition": {
-        "StringEquals": {
-          "aws:RequestTag/Application": "jimmy",
-          "aws:RequestTag/Environment": "${environment}"
-        }
-      }
-    },
-    {
-      "Sid": "CreateRuntimeEndpointAndTags",
-      "Effect": "Allow",
-      "Action": [
-        "bedrock-agentcore:CreateAgentRuntimeEndpoint",
-        "bedrock-agentcore:TagResource"
-      ],
-      "Resource": [
-        "arn:aws:bedrock-agentcore:${region}:${account_id}:runtime/*"
-      ],
-      "Condition": {
-        "StringEquals": {
-          "aws:RequestTag/Application": "jimmy",
-          "aws:RequestTag/Environment": "${environment}"
-        }
-      }
-    },
-    {
-      "Sid": "WorkflowRuntimes",
-      "Effect": "Allow",
-      "Action": [
-        "bedrock-agentcore:GetAgentRuntime",
-        "bedrock-agentcore:UpdateAgentRuntime",
-        "bedrock-agentcore:ListAgentRuntimeVersions",
-        "bedrock-agentcore:ListAgentRuntimeEndpoints",
-        "bedrock-agentcore:TagResource",
-        "bedrock-agentcore:UntagResource",
-        "bedrock-agentcore:ListTagsForResource"
-      ],
-      "Resource": [
-        "arn:aws:bedrock-agentcore:${region}:${account_id}:runtime/jimmy_${environment}_*"
-      ]
-    },
-    {
-      "Sid": "WorkflowIdentity",
-      "Effect": "Allow",
-      "Action": [
-        "bedrock-agentcore:CreateWorkloadIdentity",
-        "bedrock-agentcore:GetWorkloadIdentity",
-        "bedrock-agentcore:UpdateWorkloadIdentity"
-      ],
-      "Resource": [
-        "arn:aws:bedrock-agentcore:${region}:${account_id}:workload-identity-directory/default",
-        "arn:aws:bedrock-agentcore:${region}:${account_id}:workload-identity-directory/default/workload-identity/jimmy_${environment}_*"
-      ]
-    },
-    {
-      "Sid": "TagWorkflowIdentities",
-      "Effect": "Allow",
-      "Action": [
-        "bedrock-agentcore:TagResource"
-      ],
-      "Resource": [
-        "arn:aws:bedrock-agentcore:${region}:${account_id}:workload-identity-directory/default",
-        "arn:aws:bedrock-agentcore:${region}:${account_id}:workload-identity-directory/default/workload-identity/jimmy_${environment}_*"
-      ]
-    },
-    {
       "Sid": "WorkflowLogs",
       "Effect": "Allow",
       "Action": [
@@ -251,7 +183,8 @@
       ],
       "Resource": [
         "arn:aws:logs:${region}:${account_id}:log-group:/aws/lambda/jimmy-${environment}-*",
-        "arn:aws:logs:${region}:${account_id}:log-group:/aws/bedrock-agentcore/runtimes/jimmy_${environment}_*"
+        "arn:aws:logs:${region}:${account_id}:log-group:/aws/bedrock-agentcore/runtimes/jimmy_${environment}_*",
+        "arn:aws:logs:${region}:${account_id}:log-group:/aws/ecs/jimmy-${environment}-*-worker"
       ]
     },
     {
@@ -512,7 +445,9 @@
       ],
       "Resource": [
         "arn:aws:iam::${account_id}:role/jimmy-${environment}-*-api",
-        "arn:aws:iam::${account_id}:role/jimmy-${environment}-*-runtime"
+        "arn:aws:iam::${account_id}:role/jimmy-${environment}-*-runtime",
+        "arn:aws:iam::${account_id}:role/jimmy-${environment}-*-worker",
+        "arn:aws:iam::${account_id}:role/jimmy-${environment}-*-execution"
       ],
       "Condition": {
         "StringEquals": {

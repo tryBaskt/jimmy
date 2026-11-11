@@ -12,7 +12,8 @@
       "Effect": "Allow",
       "Action": [
         "ecr:BatchGetImage",
-        "ecr:GetDownloadUrlForLayer"
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchCheckLayerAvailability"
       ],
       "Resource": "arn:aws:ecr:${region}:${account_id}:repository/jimmy-${environment}-*-runtime"
     },
@@ -50,6 +51,64 @@
         "ecr:GetDownloadUrlForLayer"
       ],
       "Resource": "arn:aws:ecr:${region}:${account_id}:repository/jimmy-${environment}-*-api"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:${region}:${account_id}:log-group:/aws/ecs/jimmy-${environment}-*-worker:*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecs:RunTask"
+      ],
+      "Resource": "arn:aws:ecs:${region}:${account_id}:task-definition/jimmy-${environment}-*-worker:*",
+      "Condition": {
+        "ArnLike": {
+          "ecs:cluster": "arn:aws:ecs:${region}:${account_id}:cluster/jimmy-${environment}-*-worker"
+        }
+      }
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DescribeTasks",
+        "ecs:StopTask"
+      ],
+      "Resource": "arn:aws:ecs:${region}:${account_id}:task/jimmy-${environment}-*-worker/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "iam:PassRole"
+      ],
+      "Resource": [
+        "arn:aws:iam::${account_id}:role/jimmy-${environment}-*-worker",
+        "arn:aws:iam::${account_id}:role/jimmy-${environment}-*-execution"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "ecs-tasks.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket"
+      ],
+      "Resource": "arn:aws:s3:::jimmy-${environment}-*-runs-${account_id}"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
+      "Resource": "arn:aws:s3:::jimmy-${environment}-*-runs-${account_id}/runs/*"
     }
   ]
 }

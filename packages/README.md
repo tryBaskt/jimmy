@@ -1,15 +1,12 @@
 # Shared packages
 
-One Python distribution, `jimmy-shared`, provides three importable packages:
+One Python distribution, `jimmy-shared`, provides two importable packages:
 
 ```text
 packages/
   pyproject.toml
   http_utils/
     src/            -> http_utils    Shared FastAPI app setup
-    tests/
-  clients/
-    src/            -> clients       External service clients
     tests/
   security/
     src/            -> security      Authentication and token validation
@@ -23,7 +20,6 @@ directory, not part of the import name:
 
 ```python
 from http_utils.app import create_app
-from clients.agentcore_client import invoke
 from security.workflow_auth import current_user
 ```
 

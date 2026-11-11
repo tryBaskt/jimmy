@@ -18,6 +18,7 @@ resource "aws_kms_key" "logs" {
         Condition = { ArnLike = {
           "kms:EncryptionContext:aws:logs:arn" = flatten([for workflow in local.workflows : [
             "arn:aws:logs:${var.region}:${local.account}:log-group:/aws/bedrock-agentcore/runtimes/jimmy_${var.environment}_${workflow.id}*",
+            "arn:aws:logs:${var.region}:${local.account}:log-group:/aws/ecs/${local.prefix}-${replace(workflow.id, "_", "-")}-worker",
             "arn:aws:logs:${var.region}:${local.account}:log-group:/aws/lambda/${local.prefix}-${replace(workflow.id, "_", "-")}-api"
           ]])
         } }

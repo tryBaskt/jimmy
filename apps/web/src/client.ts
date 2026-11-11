@@ -44,16 +44,18 @@ async function initializeSession() {
   sessionStorage.removeItem('oauth_state'); sessionStorage.removeItem('oauth_verifier');
   history.replaceState({}, '', '/');
 }
-export async function login() {
+async function startAuth(path: '/oauth2/authorize' | '/signup') {
   const verifier = b64(crypto.getRandomValues(new Uint8Array(48)));
   const state = b64(crypto.getRandomValues(new Uint8Array(24)));
   sessionStorage.setItem('oauth_verifier', verifier); sessionStorage.setItem('oauth_state', state);
   const challenge = b64(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))));
-  location.href = `${config.cognitoDomain}/oauth2/authorize?${new URLSearchParams({
+  location.href = `${config.cognitoDomain}${path}?${new URLSearchParams({
     client_id: config.clientId!, response_type: 'code', scope: 'openid email profile',
     redirect_uri: location.origin + '/', state, code_challenge: challenge, code_challenge_method: 'S256',
   })}`;
 }
+export function login() { return startAuth('/oauth2/authorize'); }
+export function signup() { return startAuth('/signup'); }
 export function logout() {
   token = ''; sessionStorage.removeItem('jimmy_token');
   location.href = config.cognitoDomain ? `${config.cognitoDomain}/logout?${new URLSearchParams({
@@ -74,7 +76,7 @@ async function request(path: string, init?: RequestInit) {
   return response;
 }
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  // Run discovery remains browser-local until the persistent data layer is implemented.
+  // Run discovery is browser-local. The API stores each run by ID.
   if (path === '/api/paper-replication/runs' && !init?.method) {
     const ids: string[] = JSON.parse(localStorage.getItem(runKey()) || '[]');
     const cache = JSON.parse(localStorage.getItem(runKey() + '-summaries') || '{}');
