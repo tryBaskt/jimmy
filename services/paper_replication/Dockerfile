@@ -10,5 +10,4 @@ COPY --from=builder /opt/venv /opt/venv
 RUN useradd --create-home --uid 10001 jimmy
 ENV PATH="/opt/venv/bin:$PATH" PYTHONUNBUFFERED=1 JIMMY_WORKSPACE=/tmp/jimmy
 USER jimmy
-EXPOSE 8080
 CMD ["python", "-m", "runtime"]

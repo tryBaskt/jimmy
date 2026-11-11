@@ -80,30 +80,9 @@ class ResearchPlan(Contract):
     claim_citation: Citation
     methodology: str
     original_data_requirements: str
-    dataset: DatasetSpec
-    experiments: list[ExperimentSpec] = Field(min_length=1, max_length=8)
-    limitations: list[str]
-
-
-class InvestigationPlan(ResearchPlan):
+    experiments: list[ExperimentSpec] = Field(min_length=1, max_length=4)
     extrapolations: list[ExperimentSpec] = Field(max_length=5)
-    alternative_datasets: list[DatasetSpec] = Field(max_length=MAX_DATA_REQUESTS_PER_ROUND - 1)
-
-
-class DataDecision(Contract):
-    action: Literal["accept", "retry", "stop"]
-    reason: str
-    selected_candidate: int | None = Field(ge=1, le=MAX_DATA_ATTEMPTS * MAX_DATA_REQUESTS_PER_ROUND)
-    requests: list[DatasetSpec] = Field(max_length=MAX_DATA_REQUESTS_PER_ROUND)
-    deviations: list[str]
-    evaluation_start: date | None = Field(description="Chosen evaluation start, excluding formation warmup")
-    evaluation_end: date | None = Field(description="Exclusive chosen evaluation end")
-
-    @model_validator(mode="after")
-    def ordered_dates(self):
-        if self.evaluation_start and self.evaluation_end and self.evaluation_start >= self.evaluation_end:
-            raise ValueError("Evaluation start must precede exclusive end")
-        return self
+    limitations: list[str]
 
 
 class ExperimentAdjustment(Contract):
@@ -117,7 +96,6 @@ class ExperimentAdjustment(Contract):
     reason: str = Field(min_length=1)
 
 
-class ExperimentRevision(Contract):
-    selected_candidate: int | None = Field(ge=1, le=MAX_DATA_ATTEMPTS * MAX_DATA_REQUESTS_PER_ROUND)
-    experiments: list[ExperimentAdjustment] = Field(max_length=13)
-    rationale: str
+class ReportAssessment(Contract):
+    assessment: str = Field(min_length=1)
+    reason_no_experiments: str | None

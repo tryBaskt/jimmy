@@ -4,8 +4,8 @@ import json
 import httpx
 import pytest
 
-import workflow
-from models import DatasetSpec
+from harness import workflow
+from harness.models import DatasetSpec
 from settings import configure_openai
 
 
@@ -27,41 +27,16 @@ def model_with_responses(outputs, model="gpt-6.1-sol"):
     return workflow.chat_model(model, max_tokens=12000, http_client=client), calls
 
 
-def test_structured_output_validates_and_retries_with_explicit_budget(tmp_path):
-    good = {"name": "Prices", "source": "yfinance", "symbols": ["AAPL"], "start": "2000-01-01",
-            "end": "2020-01-01", "csv_url": None, "rationale": "Test", "known_differences": []}
-    model, calls = model_with_responses([response("{}"), response(json.dumps(good))])
-    assert workflow.structured(model, tmp_path, DatasetSpec, "Test", {}, "plan").symbols == ["AAPL"]
-    assert len(calls) == 2
-    for call in calls:
-        assert call["max_output_tokens"] == 12000
-        assert call["store"] is False
-        assert call["text"]["format"]["type"] == "json_schema"
-        assert call["text"]["format"]["strict"] is True
-    assert "Correct the previous invalid output" in json.dumps(calls[1]["input"])
-    assert (tmp_path / "plan_2.json").exists()
-
-
 @pytest.mark.parametrize("output", [response("", refusal=True), response("{}", status="incomplete")])
-def test_unusable_structured_output_is_bounded(tmp_path, output):
+def test_pi_rejects_refused_or_incomplete_response(tmp_path, monkeypatch, output):
     model, calls = model_with_responses([output])
-    with pytest.raises(ValueError, match="did not produce valid"):
-        workflow.structured(model, tmp_path, DatasetSpec, "Test", {}, "plan")
-    assert len(calls) == 2
-
-
-def test_assessment_uses_openai_response_text(tmp_path):
-    model, calls = model_with_responses([response("Evidence assessment")])
-    assert workflow.write_assessment(model, tmp_path, {"results": []}) == "Evidence assessment"
-    assert calls[0]["max_output_tokens"] == 7000
+    monkeypatch.setattr(workflow, "read_paper", lambda path: ["Winners outperform losers"])
+    runtime = workflow.Runtime(model, None, tmp_path, "2026-10-29", {})
+    with pytest.raises(RuntimeError, match="incomplete or invalid"):
+        workflow.run_research(runtime, tmp_path / "paper.pdf")
+    assert len(calls) == 1
+    assert calls[0]["max_output_tokens"] == 12000
     assert calls[0]["store"] is False
-    assert (tmp_path / "report_response.json").exists()
-
-
-def test_incomplete_assessment_fails(tmp_path):
-    model, _ = model_with_responses([response("Partial", status="incomplete")])
-    with pytest.raises(RuntimeError, match="did not complete"):
-        workflow.write_assessment(model, tmp_path, {})
 
 
 def test_research_assistant_calls_only_its_assigned_tool(tmp_path, monkeypatch):

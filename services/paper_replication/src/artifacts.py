@@ -1,6 +1,5 @@
 import json
 import re
-import threading
 from pathlib import Path
 from datetime import datetime, timezone
 RUN_ID = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
@@ -18,9 +17,6 @@ class RunStore:
         self.runs = self.root / "runs"
         self.jobs = self.root / "jobs"
         self.uploads = self.root / "uploads"
-        self.processes = {}
-        self.lock = threading.RLock()
-        self.stopping = False
         for folder in (self.runs, self.jobs, self.uploads):
             folder.mkdir(parents=True, exist_ok=True)
 
@@ -70,11 +66,13 @@ class RunStore:
                     pass
         except FileNotFoundError:
             pass
+        manifests = [*folder.glob("data_attempt_*/manifest.json"),
+                     *folder.glob("data_attempt_*/candidate_*/manifest.json")]
+        acquisitions = [value for path in sorted(manifests) if (value := read_json(path))]
         snapshot.update(
             plan=plan, results=results, events=events,
             experiments=read_json(folder / "experiments.json", []),
-            acquisitions=[value for path in sorted(folder.glob("data_attempt_*/manifest.json"))
-                          if (value := read_json(path))],
+            acquisitions=sorted(acquisitions, key=lambda item: item.get("candidate_id", 0)),
             decisions=[value for path in sorted(folder.glob("data_decision_*.json"))
                        if (value := read_json(path))],
             web=[value for path in sorted(folder.glob("web_research_*.json"))

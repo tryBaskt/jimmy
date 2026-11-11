@@ -7,7 +7,7 @@ def configure_openai(secrets_client=None) -> str:
     if not os.getenv("OPENAI_API_KEY"):
         arn = os.getenv("OPENAI_API_KEY_SECRET_ARN")
         if not arn:
-            raise ValueError("Configure OPENAI_API_KEY_SECRET_ARN for the AgentCore runtime")
+            raise ValueError("Configure OPENAI_API_KEY_SECRET_ARN for the ECS worker")
         # Executed only inside the deployed runtime, never by deployment tooling.
         if secrets_client is None:
             import boto3

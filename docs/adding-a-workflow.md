@@ -1,10 +1,8 @@
 # Adding a workflow
 
-A workflow is an independently deployable service under `services/<id>/`. It owns
-its HTTP interface, input/output schemas, execution graph and tests. API Gateway
-routes `/api/<id-with-dashes>/*` to that service's API Lambda. AgentCore hosts its
-graph in a separate runtime. The adapter handles HTTP uploads/downloads and signs
-runtime calls; it is deployed with its workflow, not as a central API application.
+A workflow is an independently deployable service under `services/<id>/`. API
+Gateway routes `/api/<id-with-dashes>/*` to its Lambda adapter. The adapter
+launches a standalone ECS Fargate task and reads run status and outputs from S3.
 
 ## Create and register
 
@@ -47,19 +45,16 @@ paper replication's `settings.py` demonstrates runtime secret loading in AWS.
 - Use `http_utils.app.create_app(router, workflow_id=..., title=...)`. It adds CORS,
   public `/<prefix>/health`, authenticated `/<prefix>/me`, and authentication on all
   business routes. Use `Depends(security.workflow_auth.current_user)` when a handler needs the user ID.
-- Call `clients.agentcore_client.invoke(session_id, owner, action, ...)` from the workflow API.
-  It forwards the verified user ID and uses the workflow's scoped IAM role. Never accept
-  an owner from an HTTP request body in place of the authenticated identity.
-- Expose the AgentCore HTTP protocol through `BedrockAgentCoreApp`. A synchronous
-  starter should finish within the HTTP request timeout. For longer work, register
-  an async task and respond immediately; paper replication demonstrates isolated
-  execution, status checks, cancellation, ownership checks and shutdown handling.
+- Scope run storage to the authenticated user. Paper replication's `jobs.py`
+  shows how to start a task, handle duplicate requests, poll status, and cancel.
+- Package a worker that reads `RUN_PREFIX` and `RUN_BUCKET` from its environment,
+  executes the workflow, and saves its final snapshot and outputs to S3 before exiting.
 - Store runtime-only dependencies in the `runtime` extra. The API image installs the
   base service and shared HTTP package, not scientific/runtime dependencies.
 - Build both images from the repository root. CI uses `Dockerfile` for the runtime
   and `Dockerfile.api` for Lambda, with Linux ARM64.
 
-The shared package contains authentication, HTTP setup and AgentCore transport. Workflow-specific business logic belongs in the service.
+The shared package contains authentication and HTTP setup. Workflow-specific business logic belongs in the service.
 
 ## Test
 

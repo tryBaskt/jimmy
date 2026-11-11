@@ -1,59 +1,107 @@
 import json
-import base64
-import threading
+from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+from fastapi import HTTPException
+
+import jobs
 import runtime
-from artifacts import RunStore
+import storage
 
 
-def test_run_ownership_is_checked_before_artifact_access(tmp_path, monkeypatch):
-    store = RunStore(tmp_path)
-    monkeypatch.setattr(runtime, "store", store)
+@pytest.fixture
+def objects(monkeypatch):
+    objects = {}
+
+    def put(key, data, *, create_only=False, **_):
+        if create_only and key in objects:
+            return False
+        objects[key] = data
+        return True
+
+    monkeypatch.setattr(storage, "put", put)
+    monkeypatch.setattr(storage, "get", objects.get)
+    for name, value in {"ECS_CLUSTER_ARN": "cluster", "ECS_TASK_DEFINITION_ARN": "family:1",
+                        "ECS_SUBNET_IDS": "subnet", "ECS_SECURITY_GROUP_ID": "sg"}.items():
+        monkeypatch.setenv(name, value)
+    return objects
+
+
+def test_api_launches_on_demand_and_polls_and_cancels_the_same_task(objects, monkeypatch):
+    calls = []
+    ecs = SimpleNamespace(
+        run_task=lambda **args: calls.append(args) or {"tasks": [{"taskArn": "task"}]},
+        describe_tasks=lambda **_: {"tasks": [{"lastStatus": "RUNNING"}]},
+        stop_task=lambda **args: calls.append(args),
+    )
+    monkeypatch.setattr(storage, "aws_client", lambda service: ecs)
     run_id = str(uuid4())
-    (store.runs / run_id).mkdir()
-    (store.runs / run_id / "report.md").write_text("private report")
-    store.write_job(run_id, {"owner": "alice", "status": "completed"})
-    request = {"run_id": run_id, "action": "artifact", "artifact": "report.md"}
-    assert runtime.invoke(request | {"owner": "bob"})["status_code"] == 404
-    assert runtime.invoke(request | {"owner": "alice"}) == {"content": "private report"}
-    assert runtime.invoke(request | {"owner": "alice", "artifact": "../../secret"})["status_code"] == 400
+    submit = {"paper": b"%PDF-fixture", "filename": "paper.pdf", "options": {}}
+    assert jobs.invoke(run_id, "alice", "start", **submit)["status"] == "running"
+    assert jobs.invoke(run_id, "alice", "start", **submit)["status"] == "running"
+    assert len(calls) == 1
+    assert calls[0]["launchType"] == "FARGATE"
+    assert calls[0]["count"] == 1
+    assert calls[0]["overrides"]["containerOverrides"][0]["environment"] == [
+        {"name": "RUN_PREFIX", "value": jobs.run_prefix(run_id, "alice")},
+    ]
+    with pytest.raises(HTTPException) as error:
+        jobs.invoke(run_id, "bob", "cancel")
+    assert error.value.status_code == 404
+    assert jobs.invoke(run_id, "alice", "cancel")["status"] == "cancelled"
+    assert jobs.invoke(run_id, "alice")["status"] == "cancelled"
+    assert calls[1]["task"] == "task"
 
 
-def test_expired_session_does_not_claim_success(tmp_path, monkeypatch):
-    monkeypatch.setattr(runtime, "store", RunStore(tmp_path))
-    assert runtime.invoke({"run_id": str(uuid4()), "owner": "alice"})["status_code"] == 404
+def test_retry_keeps_task_definition_and_idempotency_token(objects, monkeypatch):
+    calls = []
+
+    def run_task(**args):
+        calls.append(args)
+        return {"tasks": [{"taskArn": "task"}]} if len(calls) == 2 else {"failures": [{"reason": "CAPACITY"}]}
+
+    monkeypatch.setattr(storage, "aws_client", lambda _: SimpleNamespace(
+        run_task=run_task, describe_tasks=lambda **_: {"tasks": []}))
+    args = (str(uuid4()), "alice", "start")
+    submit = {"paper": b"%PDF-fixture", "filename": "paper.pdf", "options": {}}
+    with pytest.raises(HTTPException) as error:
+        jobs.invoke(*args, **submit)
+    assert error.value.status_code == 503
+    monkeypatch.setenv("ECS_TASK_DEFINITION_ARN", "family:2")
+    assert jobs.invoke(*args, **submit)["status"] == "running"
+    assert calls[0] == calls[1]
+    assert calls[1]["taskDefinition"] == "family:1"
 
 
-def test_duplicate_start_does_not_execute_again(tmp_path, monkeypatch):
-    store = RunStore(tmp_path)
-    monkeypatch.setattr(runtime, "store", store)
-    run_id = str(uuid4()); (store.runs / run_id).mkdir()
-    store.write_job(run_id, {"owner": "alice", "status": "completed"})
-    monkeypatch.setattr(runtime.subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(AssertionError("duplicate launch")))
-    assert runtime.invoke({"run_id": run_id, "owner": "alice", "action": "start"})["status"] == "completed"
+def test_worker_publishes_report_before_final_snapshot(objects, tmp_path, monkeypatch):
+    run_id = str(uuid4())
+    prefix = jobs.run_prefix(run_id, "alice")
+    paper_key = f"{prefix}/uploads/paper.pdf"
+    objects[paper_key] = b"%PDF-fixture"
+    storage.put_json(f"{prefix}/request.json", {
+        "id": run_id, "filename": "paper.pdf", "created_at": "2000-01-01T00:00:00+00:00",
+        "paper_key": paper_key, "options": {"workers": 2},
+    })
+    monkeypatch.setattr(runtime, "configure_openai", lambda: "pi")
+    monkeypatch.setattr(runtime, "chat_model", lambda name, **_: name)
 
+    def research(config, paper_path):
+        assert paper_path.read_bytes() == b"%PDF-fixture"
+        assert config.pi_model == "pi"
+        assert config.workers == 2
+        config.event("planner", "Planning")
+        assert jobs.invoke(run_id, "alice")["events"][-1]["message"] == "Planning"
+        (config.run_dir / "report.md").write_text("saved report")
 
-def test_async_start_and_cancel_stop_the_child(tmp_path, monkeypatch):
-    monkeypatch.setattr(runtime, "store", RunStore(tmp_path))
-    stopped = threading.Event()
-    task_finished = threading.Event()
-    class Process:
-        def poll(self):
-            return -15 if stopped.is_set() else None
-        def wait(self, timeout=None):
-            assert stopped.wait(timeout=3)
-            return -15
-        def terminate(self):
-            stopped.set()
-    monkeypatch.setattr(runtime.subprocess, "Popen", lambda *args, **kwargs: Process())
-    monkeypatch.setattr(runtime.app, "add_async_task", lambda name: 17)
-    monkeypatch.setattr(runtime.app, "complete_async_task", lambda task: task_finished.set())
-    request = {"run_id": str(uuid4()), "owner": "alice"}
-    result = runtime.invoke(request | {"action": "start", "filename": "paper.pdf",
-                            "paper": base64.b64encode(b"%PDF-test-fixture").decode()})
-    assert result["status"] == "running"
-    assert runtime.invoke(request | {"action": "cancel"})["status"] == "cancelled"
-    assert stopped.is_set()
-    assert task_finished.wait(timeout=3)
-    assert runtime.invoke(request)["status"] == "cancelled"
+    monkeypatch.setattr(runtime, "run_research", research)
+    runtime.run_job(prefix, tmp_path)
+    assert jobs.invoke(run_id, "alice")["status"] == "completed"
+    assert jobs.invoke(run_id, "alice", "artifact", artifact="report.md") == {"content": "saved report"}
+    with pytest.raises(HTTPException) as error:
+        jobs.invoke(run_id, "bob", "artifact", artifact="report.md")
+    assert error.value.status_code == 404
+    with pytest.raises(HTTPException) as error:
+        jobs.invoke(run_id, "alice", "artifact", artifact="../../request.json")
+    assert error.value.status_code == 400
+    assert json.loads(objects[f"{prefix}/snapshot.json"])["report_ready"] is True

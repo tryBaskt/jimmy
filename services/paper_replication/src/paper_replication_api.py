@@ -1,4 +1,3 @@
-import base64
 import io
 from uuid import UUID, uuid4
 
@@ -9,9 +8,9 @@ from pypdf import PdfReader
 from starlette.concurrency import run_in_threadpool
 
 from security.workflow_auth import current_user
-from clients.agentcore_client import invoke
+from jobs import invoke
 from http_utils.app import create_app
-from models import MAX_DATA_ATTEMPTS
+from harness.models import MAX_DATA_ATTEMPTS
 
 router = APIRouter()
 
@@ -37,7 +36,7 @@ async def start(paper: UploadFile = File(...), extrapolations: int = Form(3, ge=
                 raise HTTPException(400, f"Cannot read PDF: {error}") from None
         await run_in_threadpool(validate)
         return await run_in_threadpool(invoke, str(run_id or uuid4()), owner, "start",
-                                      paper=base64.b64encode(contents).decode(), filename=paper.filename,
+                                      paper=contents, filename=paper.filename,
                                       options={"extrapolations": extrapolations, "data_attempts": data_attempts,
                                                "workers": workers, "symbols": symbols})
     finally:

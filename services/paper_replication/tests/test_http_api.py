@@ -1,6 +1,4 @@
-import base64
 import io
-import json
 import time
 from types import SimpleNamespace
 from uuid import uuid4
@@ -13,7 +11,6 @@ from pypdf import PdfWriter
 
 import security.workflow_auth as auth
 import paper_replication_api as main
-import clients.agentcore_client as agentcore
 
 
 @pytest.fixture
@@ -65,22 +62,8 @@ def test_pdf_submission_passes_verified_owner_and_stable_id(client, monkeypatch)
                                data={"run_id": run_id})
         assert response.status_code == 202
         assert calls[0][0] == (run_id, "verified-user", "start")
-        assert base64.b64decode(calls[0][1]["paper"]) == paper.getvalue()
+        assert calls[0][1]["paper"] == paper.getvalue()
         response = client.post("/api/paper-replication/runs", files={"paper": ("paper.pdf", b"bad")})
         assert response.status_code == 400
     finally:
         main.app.dependency_overrides.clear()
-
-
-def test_agentcore_response_stream_is_closed(monkeypatch):
-    body = io.BytesIO(json.dumps({"id": "test"}).encode())
-    calls = []
-    monkeypatch.setenv("AGENTCORE_RUNTIME_ARN", "arn:example")
-    monkeypatch.delenv("WORKFLOW_TRANSPORT", raising=False)
-    monkeypatch.setattr(agentcore, "client", lambda: SimpleNamespace(
-        invoke_agent_runtime=lambda **kwargs: calls.append(kwargs) or {"response": body}))
-    run_id = str(uuid4())
-    assert agentcore.invoke(run_id, "owner") == {"id": "test"}
-    assert calls[0]["runtimeSessionId"] == run_id
-    assert json.loads(calls[0]["payload"])["owner"] == "owner"
-    assert body.closed

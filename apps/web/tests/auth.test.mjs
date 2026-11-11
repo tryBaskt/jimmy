@@ -66,20 +66,25 @@ test('a response without an identity token is rejected instead of storing undefi
   assert.equal(sessionStorage.getItem('jimmy_token'), null);
 });
 
-test('normal signed-out initialization has no session; login preserves S256 and state', async () => {
-  browser();
-  globalThis.fetch = async () => response(config);
-  const auth = await client();
-  await auth.initialize();
-  assert.equal(auth.hasSession(), false);
-  await auth.login();
-  const url = new URL(location.href);
-  assert.equal(url.origin, 'https://auth.example');
-  assert.equal(url.searchParams.get('state'), sessionStorage.getItem('oauth_state'));
-  const expected = Buffer.from(await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode(sessionStorage.getItem('oauth_verifier')))).toString('base64url');
-  assert.equal(url.searchParams.get('code_challenge_method'), 'S256');
-  assert.equal(url.searchParams.get('code_challenge'), expected);
-});
+for (const [action, path] of [['login', '/oauth2/authorize'], ['signup', '/signup']]) {
+  test(`${action} uses the Cognito OAuth code flow with S256 and state`, async () => {
+    browser();
+    globalThis.fetch = async () => response(config);
+    const auth = await client();
+    await auth.initialize();
+    assert.equal(auth.hasSession(), false);
+    await auth[action]();
+    const url = new URL(location.href);
+    assert.equal(url.origin, 'https://auth.example');
+    assert.equal(url.pathname, path);
+    assert.equal(url.searchParams.get('response_type'), 'code');
+    assert.equal(url.searchParams.get('client_id'), config.clientId);
+    assert.equal(url.searchParams.get('state'), sessionStorage.getItem('oauth_state'));
+    const expected = Buffer.from(await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode(sessionStorage.getItem('oauth_verifier')))).toString('base64url');
+    assert.equal(url.searchParams.get('code_challenge_method'), 'S256');
+    assert.equal(url.searchParams.get('code_challenge'), expected);
+  });
+}
 
 test('expired sessions are removed from discovery instead of repeatedly invoking an empty runtime', async () => {
   browser();

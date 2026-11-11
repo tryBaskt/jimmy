@@ -7,13 +7,13 @@ It does not deploy from pull requests or feature branches.
 
 ## Merge to deploy
 
-For dev, the one-time bootstrap is complete: `jimmy-dev-github-deploy` trusts the
+The dev bootstrap role `jimmy-dev-github-deploy` trusts the
 GitHub OIDC provider for `tryBaskt/jimmy` and the `dev` environment. Its ARN is derived
 from the environment's `AWS_ACCOUNT_ID` secret and branch name; no `AWS_ROLE_ARN`
 setting is needed. The bootstrap role and workflow permissions boundary are defined
 in `infra/github/` and are intentionally outside the application deployment pipeline.
-Only the dev bootstrap has been provisioned; prod needs its own equivalent bootstrap
-before its first merge. The GitHub OIDC provider is shared account infrastructure.
+Dev has the ECS bootstrap permissions. Apply the
+[bootstrap configuration](../infra/github/README.md) for other environments before deploying there. The GitHub OIDC provider is shared account infrastructure.
 
 The existing GitHub environment secrets are used directly:
 
@@ -23,6 +23,8 @@ The existing GitHub environment secrets are used directly:
 | `AWS_REGION` | Environment secret | Region, defaulting to `us-east-1` |
 | `OPENAI_API_KEY` | Environment secret | Raw OpenAI API key |
 | `OPENAI_MODEL` | Environment variable, optional | Defaults to `gpt-6.1-sol` |
+| `RESEARCH_ASSISTANT_MODEL` | Environment variable, optional | Defaults to `gpt-5-mini` |
+| `PI_MAX_MODEL_CALLS` | Environment variable, optional | Defaults to 48 |
 
 `BIGDATA_SECRET_ARN` is not used by the current paper replication workflow.
 
@@ -30,23 +32,18 @@ Terraform provisions `jimmy-<env>-openai-api-key` in Secrets Manager from the Gi
 secret. It uses an ephemeral sensitive input and the provider's write-only argument,
 so the key is absent from Terraform state and saved plans. The GitHub run number
 updates the secret version on each deployment. Foundation outputs contain only the
-secret ARN, which workflow Terraform passes to AgentCore automatically. No manual
+secret ARN, which workflow Terraform passes to the ECS task automatically. No manual
 secret creation, ARN lookup, or `OPENAI_API_KEY_SECRET_ARN` GitHub setting is needed.
 Terraform 1.11+ and AWS provider 6.71+ are required; Actions uses Terraform 1.15.7.
 
 The deployment role can write the OpenAI secret and inspect metadata, but is explicitly
-denied reading secret values. Runtime roles have scoped read access. Application roles
-must use the bootstrap permissions boundary, which limits their maximum permissions
-to image pulls, logging, workflow invocation, and the environment's OpenAI secret.
-The pipeline cannot modify the bootstrap role or its boundary policy. It can delete
-only temporary Terraform lock objects; published web assets are retained, and
-resource destruction is outside the deployment role's permissions. Lambda image
-access is granted through its execution role, without changing ECR repository policies.
+denied reading secret values. Application roles use the bootstrap permissions
+boundary. The API role can start and stop tasks in its workflow cluster and access
+its runs bucket. The task execution role pulls the image and writes logs. The task
+role reads its input and the configured OpenAI secret, and writes run outputs.
 
-Configurable names follow `jimmy-<env>-<purpose>`. S3 buckets and Cognito domains append
-the account ID for uniqueness. AgentCore runtime names use `jimmy_<env>_<workflow>`
-because AWS accepts underscores and rejects hyphens; AWS-controlled identifiers and
-log namespaces retain their required formats.
+Configurable names follow `jimmy-<env>-<purpose>`. S3 bucket names append the account
+ID for uniqueness.
 
 Protect `dev` and `prod` to require reviewed PRs and passing CI. Restrict each GitHub
 environment to its matching branch. The actual Actions trigger is a branch push,
@@ -63,10 +60,10 @@ Terraform defines resources; `workflows.json` is the registry shared by CI and d
 | `provision-infrastructure` | State bootstrap, gateway, hosting, log encryption and each workflow's ECR repositories | `foundation/terraform.tfstate` |
 | `provision-auth` | Cognito pool, client, domain and JWT authorizer | `auth/terraform.tfstate` |
 | `provision-workflows` matrix → `publish-images` | Build and publish the selected workflow's API and runtime images | None |
-| `provision-workflows` matrix → `provision-workflow` | Provision its Lambda, AgentCore runtime, routes, roles and logs after publishing succeeds | `workflows/<id>/terraform.tfstate` |
+| `provision-workflows` matrix → `provision-workflow` | Provision its Lambda, Fargate task definition, cluster, private runs bucket, routes, roles and logs after publishing succeeds | `workflows/<id>/terraform.tfstate` |
 | `provision-frontend` | Web build, environment configuration, publication and per-workflow smoke checks | None |
 
-Each workflow owns a separate API Lambda and AgentCore runtime. There is no common
+Each workflow owns a separate API Lambda and ECS worker. There is no common
 API Lambda, central route registry in Python, or per-workflow Terraform root to copy.
 `infra/workflows` calls `infra/modules/workflow` once per isolated state. Matrix jobs
 call `.github/workflows/deploy-workflow.yml` after shared infrastructure and auth.
@@ -83,35 +80,27 @@ builds reject unregistered IDs and reuse existing immutable commit tags on retri
 A workflow only receives access to the OpenAI key secret when `requires_openai` is true.
 
 No runtime connection artifacts need to pass through a central API job: each module
-wires its own API role and runtime ARN. Published frontend config includes shared
+wires its API role to its task definition and cluster. Published frontend config includes shared
 Cognito settings, the gateway URL and registry metadata. The smoke step checks every
 workflow's public health and rejects anonymous access to its `/me` endpoint.
 
-AgentCore continues to use IAM/SigV4 inbound authentication. API Gateway routes to a
-workflow-owned Lambda adapter; that adapter verifies the user and signs runtime
-requests. PUBLIC runtime networking allows outbound data acquisition and does not
-allow anonymous invocation. Shared HTTP helpers do not contain domain logic.
+The API submits one Fargate task per run. A task exits once its final snapshot and
+artifacts are saved. The task's subnet provides outbound internet access and its
+security group has no inbound rules. There is no ECS service or idle task.
 
-The state bucket remains `jimmy-<environment>-state-<account>`. The workflow step
-creates/configures it before Terraform initializes. OIDC deployment roles must allow
-passing only the environment's workflow API/runtime roles. IAM role and function names
-include the workflow ID. No database or durable research storage is introduced.
-
-This refactor has not deployed resources. If the earlier split/central API stacks have
-been deployed elsewhere, migrate or retire their state before the first apply of the
-new layout. The previous `infra/api`, `infra/paper_replication` and central `services/api`
-are replaced; resource names and paper API URLs have changed. Do not apply the new
-layout on top of old states without planning that migration.
+The Terraform state bucket stays separate from the workflow's S3 runs bucket.
+The migration drops the old AgentCore resources from Terraform state without
+deleting them. Existing AgentCore session files do not transfer to S3. Retire the
+old resources separately after verifying the ECS cutover.
 
 ## First-deployment verification
 
-After merging to `dev`, invite a test user to the new Cognito pool using your normal
-administrative process. Verify login, sign-out, expired-token handling, PDF submission,
+After merging to `dev`, use **Create account** to verify signup and email confirmation.
+Verify login, sign-out, expired-token handling, PDF submission,
 progress, report download and cancellation. Also verify a second user's token cannot
 read the first user's run. These cloud checks are not replaced by offline tests.
 
-The persistent data layer is deliberately absent. Do not treat this release as durable
-research storage; session expiry removes run files and reports.
+Verify that the report remains downloadable after the ECS task exits.
 
 ## Initial bucket recovery
 
@@ -150,25 +139,7 @@ secret account ID, which otherwise leaves downstream backend configuration empty
 The jobs validate the bucket name before initialization. Foundation/auth resource
 metadata continues to pass through the existing JSON artifacts.
 
-## AgentCore creation dependencies
-
-`CreateAgentRuntime` also authorizes automatic `DEFAULT` endpoint creation and
-resource tagging. The deployment policy includes `CreateAgentRuntimeEndpoint` and
-`TagResource` on runtime resources in the configured account and region, requiring
-Jimmy and matching-environment request tags. The create check uses `runtime/*`
-before a runtime ID exists. Later runtime management remains scoped to the workflow
-name prefix. This does not grant runtime invocation or resource deletion.
-
-AgentCore also checks `TagResource` on the default workload identity directory and
-its generated `jimmy_<env>_*` identities. The deployment role permits tagging that
-exact directory and identities belonging to its environment.
-
-AgentCore creates `/aws/bedrock-agentcore/runtimes/<runtime-id>-DEFAULT` itself.
-Workflow provisioning first applies the runtime and its dependencies, then imports
-that exact log group if Terraform does not already manage it. It validates the
-runtime ID against the selected workflow and environment before importing. The
-final plan always reconciles the full workflow, including log retention, encryption
-and tags. No log groups are deleted to recover an existing deployment.
+## Lambda image access
 
 Foundation provisions an ECR image retrieval policy for each workflow API repository.
 It grants the Lambda service only image reads, restricted to that workflow's exact

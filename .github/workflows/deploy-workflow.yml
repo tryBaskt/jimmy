@@ -57,6 +57,7 @@ jobs:
       WORKFLOW_ID: ${{ fromJSON(inputs.workflow).id }}
       OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-6.1-sol' }}
       RESEARCH_ASSISTANT_MODEL: ${{ vars.RESEARCH_ASSISTANT_MODEL || 'gpt-5-mini' }}
+      PI_MAX_MODEL_CALLS: ${{ vars.PI_MAX_MODEL_CALLS || '48' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -92,6 +93,7 @@ jobs:
         env:
           TF_VAR_openai_model: ${{ env.OPENAI_MODEL }}
           TF_VAR_research_assistant_model: ${{ env.RESEARCH_ASSISTANT_MODEL }}
+          TF_VAR_pi_max_model_calls: ${{ env.PI_MAX_MODEL_CALLS }}
         run: |
           if ! [[ "$STATE_BUCKET" =~ ^jimmy-(dev|prod)-state-[0-9]{12}$ ]]; then
             echo "Invalid Terraform state bucket configuration" >&2
@@ -99,19 +101,5 @@ jobs:
           fi
           terraform -chdir=infra/workflows init -input=false -backend-config="bucket=$STATE_BUCKET" -backend-config="key=workflows/$WORKFLOW_ID/terraform.tfstate" -backend-config="region=$AWS_REGION" -backend-config="use_lockfile=true" -backend-config="encrypt=true"
           terraform -chdir=infra/workflows validate
-          # AgentCore creates the runtime log group itself. Create/update the
-          # runtime first, then adopt its exact group before the complete plan.
-          terraform -chdir=infra/workflows plan -input=false -target=module.workflow.aws_bedrockagentcore_agent_runtime.runtime -out=runtime.tfplan
-          terraform -chdir=infra/workflows apply -input=false runtime.tfplan
-          terraform -chdir=infra/workflows show -json > workflow-state.json
-          runtime_id=$(jq -er '.values.root_module.child_modules[] | select(.address == "module.workflow") | .resources[] | select(.address == "module.workflow.aws_bedrockagentcore_agent_runtime.runtime") | .values.agent_runtime_id' workflow-state.json)
-          if ! [[ "$runtime_id" =~ ^jimmy_${DEPLOY_ENV}_${WORKFLOW_ID}-[A-Za-z0-9]+$ ]]; then
-            echo "Unexpected AgentCore runtime ID" >&2
-            exit 1
-          fi
-          resources=$(terraform -chdir=infra/workflows state list)
-          if ! grep -Fxq 'module.workflow.aws_cloudwatch_log_group.runtime' <<< "$resources"; then
-            terraform -chdir=infra/workflows import -input=false module.workflow.aws_cloudwatch_log_group.runtime "/aws/bedrock-agentcore/runtimes/${runtime_id}-DEFAULT"
-          fi
           terraform -chdir=infra/workflows plan -input=false -out=workflow.tfplan
           terraform -chdir=infra/workflows apply -input=false workflow.tfplan

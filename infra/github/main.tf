@@ -48,3 +48,13 @@ resource "aws_iam_policy" "workflow_boundary" {
   description = "Maximum runtime and API permissions for ${local.prefix} workflows"
   policy      = templatefile("${path.module}/boundary.json.tftpl", local.template_variables)
 }
+
+resource "aws_iam_policy" "ecs_deploy" {
+  name   = "${local.prefix}-ecs-deploy-permissions"
+  policy = templatefile("${path.module}/ecs-permissions.json.tftpl", local.template_variables)
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_deploy" {
+  role       = aws_iam_role.github_deploy.name
+  policy_arn = aws_iam_policy.ecs_deploy.arn
+}
