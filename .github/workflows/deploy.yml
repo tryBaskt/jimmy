@@ -185,7 +185,8 @@ jobs:
           web_origin=$(jq -er '.web_origin' foundation.json)
           client_id=$(jq -er '.cognito_client_id' auth.json)
           while IFS= read -r prefix; do
-            curl --fail --silent --show-error --max-time 30 "$api_url$prefix/health" | jq -e '.status == "ok"'
+            curl --fail --silent --show-error --max-time 30 "$api_url$prefix/health" |
+              jq -e '.status == "ok" and .runtime_configured == true'
             status=$(curl --silent --show-error --max-time 30 --output /dev/null --write-out '%{http_code}' "$api_url$prefix/me")
             test "$status" = 401
           done < <(jq -r '.workflows[].api_prefix' foundation.json)

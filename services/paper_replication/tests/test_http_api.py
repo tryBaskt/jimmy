@@ -29,6 +29,17 @@ def test_routes_require_authentication(client):
     assert client.post("/api/paper-replication/runs").status_code == 401
 
 
+def test_health_reports_ecs_configuration_without_agentcore(client, monkeypatch):
+    monkeypatch.delenv("AGENTCORE_RUNTIME_ARN", raising=False)
+    for name in ("RUN_BUCKET", "ECS_CLUSTER_ARN", "ECS_TASK_DEFINITION_ARN",
+                 "ECS_SUBNET_IDS", "ECS_SECURITY_GROUP_ID"):
+        monkeypatch.setenv(name, "configured")
+    endpoint = "/api/paper-replication/health"
+    assert client.get(endpoint).json()["runtime_configured"] is True
+    monkeypatch.delenv("ECS_TASK_DEFINITION_ARN")
+    assert client.get(endpoint).json()["runtime_configured"] is False
+
+
 def test_local_auth_cannot_bypass_deployed_auth(client, monkeypatch):
     monkeypatch.setenv("JIMMY_AUTH_MODE", "local")
     monkeypatch.setenv("JIMMY_ENV", "prod")
