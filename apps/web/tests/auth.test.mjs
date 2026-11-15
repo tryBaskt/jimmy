@@ -86,32 +86,22 @@ for (const [action, path] of [['login', '/oauth2/authorize'], ['signup', '/signu
   });
 }
 
-test('expired sessions are removed from discovery instead of repeatedly invoking an empty runtime', async () => {
+test('history loads all server pages without relying on browser-local run IDs', async () => {
   browser();
-  sessionStorage.setItem('jimmy_token', 'header.' + Buffer.from(JSON.stringify({ sub: 'alice', exp: Date.now()/1000 + 600 })).toString('base64url') + '.signature');
-  localStorage.setItem('jimmy-runs-public-client-alice', JSON.stringify(['expired-run']));
-  let invocations = 0;
-  globalThis.fetch = async url => {
+  const token = 'header.' + Buffer.from(JSON.stringify({ sub: 'alice', exp: Date.now()/1000 + 600 })).toString('base64url') + '.signature';
+  sessionStorage.setItem('jimmy_token', token);
+  localStorage.setItem('jimmy-runs-public-client-alice', '["obsolete"]');
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
     if (url === '/config.json') return response(config);
-    invocations++;
-    return new Response(JSON.stringify({ detail: 'Session expired' }), { status: 404 });
+    calls.push(url);
+    assert.equal(init.headers.get('Authorization'), `Bearer ${token}`);
+    if (calls.length === 1) return response({items: [{id: 'newest'}], next_cursor: 'time#id'});
+    return response({items: [{id: 'older'}], next_cursor: null});
   };
   const auth = await client(); await auth.initialize();
-  assert.deepEqual(await auth.api('/api/paper-replication/runs'), []);
-  assert.deepEqual(await auth.api('/api/paper-replication/runs'), []);
-  assert.equal(invocations, 1);
-});
-
-test('completed run summaries do not keep their AgentCore sessions alive', async () => {
-  browser();
-  sessionStorage.setItem('jimmy_token', 'header.' + Buffer.from(JSON.stringify({ sub: 'alice', exp: Date.now()/1000 + 600 })).toString('base64url') + '.signature');
-  localStorage.setItem('jimmy-runs-public-client-alice', JSON.stringify(['finished-run']));
-  localStorage.setItem('jimmy-runs-public-client-alice-summaries', JSON.stringify({
-    'finished-run': { id: 'finished-run', status: 'completed' },
-  }));
-  globalThis.fetch = async url => { assert.equal(url, '/config.json'); return response(config); };
-  const auth = await client(); await auth.initialize();
-  assert.deepEqual(await auth.api('/api/paper-replication/runs'), [{ id: 'finished-run', status: 'completed' }]);
+  assert.deepEqual(await auth.api('/api/paper-replication/runs'), [{id: 'newest'}, {id: 'older'}]);
+  assert.deepEqual(calls, ['https://api.example/api/paper-replication/runs', 'https://api.example/api/paper-replication/runs?cursor=time%23id']);
 });
 
 test('API requests attach the identity token and preserve multipart uploads', async () => {

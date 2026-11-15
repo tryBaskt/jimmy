@@ -47,3 +47,29 @@ def put(key, data, *, content_type="application/octet-stream", create_only=False
 
 def put_json(key, value, *, create_only=False):
     return put(key, json.dumps(value).encode(), content_type="application/json", create_only=create_only)
+
+
+def index_run(prefix, job):
+    """Idempotent catalog entry; S3 remains the source of run state and artifacts."""
+    owner_key = prefix.split("/")[1]
+    aws_client("dynamodb").put_item(
+        TableName=os.environ["RUN_TABLE"],
+        Item={"owner": {"S": owner_key},
+              "created_run": {"S": job["created_at"] + "#" + job["id"]},
+              "run_id": {"S": job["id"]}},
+    )
+
+
+def run_page(owner_key, cursor=None, limit=20):
+    arguments = dict(TableName=os.environ["RUN_TABLE"],
+                     KeyConditionExpression="#owner = :owner",
+                     ExpressionAttributeNames={"#owner": "owner"},
+                     ExpressionAttributeValues={":owner": {"S": owner_key}},
+                     ScanIndexForward=False, ConsistentRead=True, Limit=limit)
+    if cursor:
+        arguments["ExclusiveStartKey"] = {
+            "owner": {"S": owner_key}, "created_run": {"S": cursor},
+        }
+    response = aws_client("dynamodb").query(**arguments)
+    return ([item["run_id"]["S"] for item in response.get("Items", [])],
+            response.get("LastEvaluatedKey", {}).get("created_run", {}).get("S"))

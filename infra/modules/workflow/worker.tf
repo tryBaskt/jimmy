@@ -1,5 +1,8 @@
 resource "aws_s3_bucket" "runs" {
   bucket = "${local.prefix}-runs-${var.foundation.account}"
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_s3_bucket_public_access_block" "runs" {

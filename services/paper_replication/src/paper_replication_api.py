@@ -1,14 +1,14 @@
 import io
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, Query
 from fastapi.responses import Response
 from mangum import Mangum
 from pypdf import PdfReader
 from starlette.concurrency import run_in_threadpool
 
 from security.workflow_auth import current_user
-from jobs import invoke, runtime_configured
+from jobs import history, invoke, runtime_configured
 from http_utils.app import create_app
 from harness.models import MAX_DATA_ATTEMPTS
 
@@ -41,6 +41,20 @@ async def start(paper: UploadFile = File(...), extrapolations: int = Form(3, ge=
                                                "workers": workers, "symbols": symbols})
     finally:
         await paper.close()
+
+
+@router.get("/runs")
+def list_runs(cursor: str | None = Query(None, max_length=150),
+              limit: int = Query(20, ge=1, le=50), owner: str = Depends(current_user)):
+    return history(owner, cursor, limit)
+
+
+@router.get("/runs/{run_id}/paper")
+def original_paper(run_id: UUID, owner: str = Depends(current_user)):
+    data = invoke(str(run_id), owner, "paper")["content"]
+    return Response(data, media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="jimmy-{run_id}-paper.pdf"',
+    })
 
 
 @router.get("/runs/{run_id}")
