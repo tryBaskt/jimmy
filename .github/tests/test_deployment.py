@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -85,6 +86,7 @@ elif command == "curl":
 
 @pytest.fixture
 def runner(tmp_path):
+    shutil.copytree(ROOT / ".github/scripts", tmp_path / ".github/scripts")
     binary = tmp_path / "bin"
     binary.mkdir()
     for name in ["aws", "docker", "terraform", "curl"]:
@@ -465,3 +467,12 @@ def test_provisioning_applies_one_full_workflow_plan(runner):
     commands = [command[2:] for command in calls() if command[0] == 'terraform']
     assert [command[0] for command in commands] == ['init', 'validate', 'plan', 'apply']
     assert commands[-1][-1] == 'workflow.tfplan'
+
+
+def test_provisioning_failure_is_annotated_and_never_applied(runner):
+    _, execute, calls = runner
+    result = execute(step('provision-workflows', 'Provision workflow'),
+                     WORKFLOW_ID='paper_replication', FAIL_TERRAFORM='plan')
+    assert result.returncode == 1
+    assert '::error title=Terraform provisioning failed::' in result.stdout
+    assert not any(c[0] == 'terraform' and c[2] == 'apply' for c in calls())
