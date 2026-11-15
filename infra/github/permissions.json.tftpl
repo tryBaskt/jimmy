@@ -467,6 +467,35 @@
         "arn:aws:s3:::jimmy-${environment}-state-${account_id}/auth/terraform.tfstate.tflock",
         "arn:aws:s3:::jimmy-${environment}-state-${account_id}/workflows/*/terraform.tfstate.tflock"
       ]
+    },
+    {
+      "Sid": "WorkflowHistoryTables",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:CreateTable",
+        "dynamodb:DescribeTable",
+        "dynamodb:UpdateTable",
+        "dynamodb:DescribeContinuousBackups",
+        "dynamodb:UpdateContinuousBackups",
+        "dynamodb:DescribeTimeToLive",
+        "dynamodb:UpdateTimeToLive",
+        "dynamodb:ListTagsOfResource",
+        "dynamodb:TagResource",
+        "dynamodb:UntagResource",
+        "dynamodb:DescribeContributorInsights",
+        "dynamodb:DescribeKinesisStreamingDestination",
+        "dynamodb:DescribeTableReplicaAutoScaling",
+        "dynamodb:PutItem"
+      ],
+      "Resource": "arn:aws:dynamodb:${region}:${account_id}:table/jimmy-${environment}-*-history"
+    },
+    {
+      "Sid": "BackfillWorkflowHistory",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject"
+      ],
+      "Resource": "arn:aws:s3:::jimmy-${environment}-*-runs-${account_id}/runs/*/*/request.json"
     }
   ]
 }

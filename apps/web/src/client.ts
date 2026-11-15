@@ -62,7 +62,6 @@ export function logout() {
     client_id: config.clientId!, logout_uri: location.origin + '/',
   })}` : '/';
 }
-function runKey() { return `jimmy-runs-${config.clientId || 'unconfigured'}-${claims().sub || 'anonymous'}`; }
 async function request(path: string, init?: RequestInit) {
   if (!hasSession()) { logout(); throw Error('Please sign in again'); }
   const headers = new Headers(init?.headers);
@@ -76,30 +75,20 @@ async function request(path: string, init?: RequestInit) {
   return response;
 }
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  // Run discovery is browser-local. The API stores each run by ID.
   if (path === '/api/paper-replication/runs' && !init?.method) {
-    const ids: string[] = JSON.parse(localStorage.getItem(runKey()) || '[]');
-    const cache = JSON.parse(localStorage.getItem(runKey() + '-summaries') || '{}');
-    const entries = await Promise.allSettled(ids.map(id => cache[id] && cache[id].status !== 'running'
-      ? Promise.resolve(cache[id]) : api(`/api/paper-replication/runs/${id}`)));
-    const retained = ids.filter((_, i) => !(entries[i].status === 'rejected' &&
-      (entries[i] as PromiseRejectedResult).reason.status === 404));
-    localStorage.setItem(runKey(), JSON.stringify(retained));
-    return entries.filter(e => e.status === 'fulfilled').map(e => e.value) as T;
+    const items: unknown[] = [];
+    let cursor: string | null = null;
+    do {
+      const query: string = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+      const page = await (await request(path + query, init)).json();
+      items.push(...page.items);
+      cursor = page.next_cursor;
+    } while (cursor);
+    return items as T;
   }
-  const result = await (await request(path, init)).json();
-  if (path === '/api/paper-replication/runs' && init?.method === 'POST') {
-    const ids = JSON.parse(localStorage.getItem(runKey()) || '[]');
-    localStorage.setItem(runKey(), JSON.stringify([result.id, ...ids.filter((id: string) => id !== result.id)].slice(0, 20)));
-  }
-  if (result.id && result.status && path.startsWith('/api/paper-replication/runs')) {
-    const cache = JSON.parse(localStorage.getItem(runKey() + '-summaries') || '{}');
-    const { id, status, created_at, filename, title, completed_experiments, failed_experiments, report_ready } = result;
-    cache[id] = { id, status, created_at, filename, title, completed_experiments, failed_experiments, report_ready };
-    localStorage.setItem(runKey() + '-summaries', JSON.stringify(cache));
-  }
-  return result;
+  return (await request(path, init)).json();
 }
+
 export async function download(path: string) {
   const response = await request(path);
   const url = URL.createObjectURL(await response.blob());

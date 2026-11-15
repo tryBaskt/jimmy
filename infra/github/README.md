@@ -23,3 +23,12 @@ state before applying this root. For dev, the import IDs are:
 
 The shared OIDC provider is retained account infrastructure. This root does not
 create or delete it. Prod must be bootstrapped separately before its first deployment.
+
+## Persistent experiment history permissions
+
+Before deploying the history change, apply this bootstrap Terraform root using
+its existing administrator workflow and imported state. The deployment role needs
+scoped history-table provisioning, backup configuration and migration writes;
+the workflow boundary must allow API `dynamodb:PutItem` and `dynamodb:Query`.
+The application deployment deliberately cannot modify its own bootstrap policy.
+Do not work around a permission failure by granting administrator access.

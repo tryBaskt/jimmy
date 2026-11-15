@@ -103,3 +103,13 @@ jobs:
           terraform -chdir=infra/workflows validate
           terraform -chdir=infra/workflows plan -input=false -out=workflow.tfplan
           terraform -chdir=infra/workflows apply -input=false workflow.tfplan
+      - name: Install history migration dependencies
+        run: |
+          python3 -m venv "$RUNNER_TEMP/history-migration"
+          "$RUNNER_TEMP/history-migration/bin/pip" install 'boto3>=1.35,<2'
+      - name: Index existing experiment history
+        run: |
+          terraform -chdir=infra/workflows output -json deployment > workflow-deployment.json
+          bucket=$(jq -er '.runs_bucket' workflow-deployment.json)
+          table=$(jq -er '.history_table' workflow-deployment.json)
+          "$RUNNER_TEMP/history-migration/bin/python" infra/scripts/backfill-history.py "$bucket" "$table"

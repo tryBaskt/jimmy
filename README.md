@@ -43,7 +43,7 @@ templates, then the PI writes its assessment from the resulting evidence.
 The frontend calls `/api/paper-replication/*`. Cognito provides email signup and sign-in, API Gateway
 checks JWTs, and the workflow API checks ownership on every run and artifact request. The
 API stores the input in S3 and starts the Fargate task. S3 stores progress
-and the report after the task exits. Run discovery is browser-local.
+and the report after the task exits. DynamoDB indexes each authenticated user’s run history across browsers and devices. Original uploaded PDFs remain downloadable from the run view.
 Searchable PDFs up to 3 MB / 250 pages are supported; scanned papers need OCR first. Web search
 is disabled until a real provider is configured.
 

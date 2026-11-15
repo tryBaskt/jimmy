@@ -13,6 +13,7 @@ import storage
 @pytest.fixture
 def objects(monkeypatch):
     objects = {}
+    monkeypatch.setattr(storage, "index_run", lambda *args: None)
 
     def put(key, data, *, create_only=False, **_):
         if create_only and key in objects:
@@ -105,3 +106,28 @@ def test_worker_publishes_report_before_final_snapshot(objects, tmp_path, monkey
         jobs.invoke(run_id, "alice", "artifact", artifact="../../request.json")
     assert error.value.status_code == 400
     assert json.loads(objects[f"{prefix}/snapshot.json"])["report_ready"] is True
+
+
+def test_catalog_failure_preserves_upload_and_prevents_unindexed_launch(objects, monkeypatch):
+    from botocore.exceptions import ClientError
+
+    run_id = str(uuid4())
+    calls = []
+    monkeypatch.setattr(storage, "aws_client", lambda _: SimpleNamespace(
+        run_task=lambda **args: calls.append(args) or {"tasks": [{"taskArn": "task"}]},
+        describe_tasks=lambda **_: {"tasks": []},
+    ))
+    def unavailable(*_):
+        raise ClientError({"Error": {"Code": "AccessDeniedException", "Message": "denied"}}, "PutItem")
+    monkeypatch.setattr(storage, "index_run", unavailable)
+    submit = {"paper": b"%PDF-fixture", "filename": "paper.pdf", "options": {}}
+    with pytest.raises(HTTPException) as error:
+        jobs.invoke(run_id, "alice", "start", **submit)
+    assert error.value.status_code == 502
+    assert calls == []
+    assert any(key.endswith("request.json") for key in objects)
+    indexed = []
+    monkeypatch.setattr(storage, "index_run", lambda prefix, job: indexed.append((prefix, job["id"])))
+    assert jobs.invoke(run_id, "alice", "start", **submit)["status"] == "running"
+    assert indexed == [(jobs.run_prefix(run_id, "alice"), run_id)]
+    assert len(calls) == 1

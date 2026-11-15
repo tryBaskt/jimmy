@@ -19,6 +19,7 @@ resource "aws_iam_role_policy" "api" {
     { Effect = "Allow", Action = ["ecs:RunTask"], Resource = "${local.task_family_arn}:*", Condition = { ArnEquals = { "ecs:cluster" = aws_ecs_cluster.worker.arn } } },
     { Effect = "Allow", Action = ["ecs:DescribeTasks", "ecs:StopTask"], Resource = "${local.ecs_arn}:task/${aws_ecs_cluster.worker.name}/*" },
     { Effect = "Allow", Action = ["iam:PassRole"], Resource = [aws_iam_role.worker.arn, aws_iam_role.execution.arn], Condition = { StringEquals = { "iam:PassedToService" = "ecs-tasks.amazonaws.com" } } },
+    { Effect = "Allow", Action = ["dynamodb:PutItem", "dynamodb:Query"], Resource = aws_dynamodb_table.history.arn },
     { Effect = "Allow", Action = ["s3:ListBucket"], Resource = aws_s3_bucket.runs.arn },
     { Effect = "Allow", Action = ["s3:GetObject"], Resource = "${aws_s3_bucket.runs.arn}/runs/*" },
     { Effect = "Allow", Action = ["s3:PutObject"], Resource = [for path in ["request.json", "task.json", "cancelled.json", "uploads/*"] : "${aws_s3_bucket.runs.arn}/runs/*/*/${path}"] },
@@ -38,6 +39,7 @@ resource "aws_lambda_function" "api" {
   environment {
     variables = {
       JIMMY_ENV               = var.foundation.environment
+      RUN_TABLE               = aws_dynamodb_table.history.name
       RUN_BUCKET              = aws_s3_bucket.runs.bucket
       ECS_CLUSTER_ARN         = aws_ecs_cluster.worker.arn
       ECS_TASK_DEFINITION_ARN = aws_ecs_task_definition.worker.arn
@@ -90,5 +92,5 @@ resource "aws_lambda_permission" "api" {
 }
 
 output "deployment" {
-  value = { id = var.workflow.id, api_prefix = var.workflow.api_prefix, cluster_arn = aws_ecs_cluster.worker.arn, task_definition_arn = aws_ecs_task_definition.worker.arn }
+  value = { id = var.workflow.id, api_prefix = var.workflow.api_prefix, history_table = aws_dynamodb_table.history.name, runs_bucket = aws_s3_bucket.runs.id, cluster_arn = aws_ecs_cluster.worker.arn, task_definition_arn = aws_ecs_task_definition.worker.arn }
 }

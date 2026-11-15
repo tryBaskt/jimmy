@@ -109,6 +109,14 @@
         "s3:PutObject"
       ],
       "Resource": "arn:aws:s3:::jimmy-${environment}-*-runs-${account_id}/runs/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:PutItem",
+        "dynamodb:Query"
+      ],
+      "Resource": "arn:aws:dynamodb:${region}:${account_id}:table/jimmy-${environment}-*-history"
     }
   ]
 }

@@ -1,6 +1,7 @@
 """Start, inspect, and stop a paper replication task from the authenticated API."""
 
 import csv
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import math
 import os
@@ -18,7 +19,7 @@ from harness.models import MAX_DATA_ATTEMPTS
 
 def runtime_configured() -> bool:
     return all(os.getenv(name, "").strip() for name in (
-        "RUN_BUCKET", "ECS_CLUSTER_ARN", "ECS_TASK_DEFINITION_ARN",
+        "RUN_BUCKET", "RUN_TABLE", "ECS_CLUSTER_ARN", "ECS_TASK_DEFINITION_ARN",
         "ECS_SUBNET_IDS", "ECS_SECURITY_GROUP_ID",
     ))
 
@@ -61,6 +62,8 @@ def start(prefix, run_id, paper, filename, options):
         }
         if not storage.put_json(request_key, job, create_only=True):
             job = storage.get_json(request_key)
+
+    storage.index_run(prefix, job)
 
     task_key = f"{prefix}/task.json"
     task = storage.get_json(task_key)
@@ -131,6 +134,11 @@ def invoke(run_id, owner, action="snapshot", **arguments):
                                                 reason="Cancelled by the run owner")
             storage.put_json(f"{prefix}/cancelled.json", {"cancelled": True})
             return state | {"status": "cancelled"}
+        if action == "paper":
+            data = storage.get(job["paper_key"])
+            if data is None:
+                raise HTTPException(404, "Paper not available")
+            return {"content": data}
         if action == "artifact" and arguments["artifact"] in {"report.md", "results.json", "plan.json"}:
             name = arguments["artifact"]
         elif action == "series" and re.fullmatch(r"[a-z][a-z0-9_]{0,39}", arguments["experiment"]):
@@ -149,3 +157,20 @@ def invoke(run_id, owner, action="snapshot", **arguments):
         return {"rows": rows}
     except (BotoCoreError, ClientError) as error:
         raise HTTPException(502, "Workflow storage or ECS is unavailable. Retry with the same run ID.") from error
+
+
+def history(owner, cursor=None, limit=20):
+    owner_key = hashlib.sha256(owner.encode()).hexdigest()
+    try:
+        ids, next_cursor = storage.run_page(owner_key, cursor, limit)
+        items = []
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            states = list(executor.map(lambda run_id: invoke(run_id, owner), ids))
+        for state in states:
+            items.append({key: state.get(key) for key in (
+                "id", "status", "created_at", "filename", "title", "report_ready",
+                "completed_experiments", "failed_experiments",
+            )})
+        return {"items": items, "next_cursor": next_cursor}
+    except (BotoCoreError, ClientError) as error:
+        raise HTTPException(502, "Experiment history is unavailable") from error
