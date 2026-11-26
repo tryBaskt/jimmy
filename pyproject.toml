@@ -1,4 +1,0 @@
-[tool.pytest.ini_options]
-testpaths = ["services", "packages", ".github/tests"]
-pythonpath = ["services/paper_replication/src"]
-addopts = "--import-mode=importlib"

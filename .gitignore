@@ -1,17 +1,1 @@
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.venv/
-node_modules/
-dist/
 .env
-.env.*
-!.env.example
-.terraform/
-*.tfstate*
-*.tfplan
-foundation.json
-auth.json
-workflows.json.tmp
-*.egg-info/
-build/
