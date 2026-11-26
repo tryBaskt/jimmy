@@ -1,0 +1,48 @@
+name: Build service image
+description: Publish one immutable ARM64 service image, reusing an existing commit tag on retries.
+inputs:
+  workflow:
+    description: Registered workflow ID.
+    required: true
+  component:
+    description: api or runtime.
+    required: true
+outputs:
+  image_uri:
+    description: The published service image URI.
+    value: ${{ steps.image.outputs.image_uri }}
+runs:
+  using: composite
+  steps:
+    - name: Build and publish selected service
+      id: image
+      shell: bash
+      env:
+        WORKFLOW_ID: ${{ inputs.workflow }}
+        COMPONENT: ${{ inputs.component }}
+      run: |
+        case "$GITHUB_REF" in
+          refs/heads/dev|refs/heads/prod) environment=${GITHUB_REF##*/} ;;
+          *) echo "Image publication requires the matching dev/prod branch" >&2; exit 1 ;;
+        esac
+        jq -e --arg environment "$environment" '.environment == $environment' foundation.json > /dev/null
+        [[ "$WORKFLOW_ID" =~ ^[a-z][a-z0-9_]{0,31}$ ]]
+        jq -e --arg id "$WORKFLOW_ID" 'any(.workflows[]; .id == $id)' foundation.json > /dev/null
+        case "$COMPONENT" in
+          api) dockerfile="services/$WORKFLOW_ID/Dockerfile.api" ;;
+          runtime) dockerfile="services/$WORKFLOW_ID/Dockerfile" ;;
+          *) echo "Unknown workflow component: $COMPONENT" >&2; exit 1 ;;
+        esac
+        repository_url=$(jq -er --arg workflow "$WORKFLOW_ID" --arg component "$COMPONENT" '.repositories[$workflow][$component] | select(type == "string" and length > 0)' foundation.json)
+        image_uri="${repository_url}:${GITHUB_SHA}"
+        error_file=$(mktemp)
+        trap 'rm -f "$error_file"' EXIT
+        if ! aws ecr describe-images --repository-name "${repository_url#*/}" --image-ids "imageTag=$GITHUB_SHA" > /dev/null 2>"$error_file"; then
+          error=$(<"$error_file")
+          if [[ "$error" != *"ImageNotFoundException"* ]]; then
+            cat "$error_file" >&2
+            exit 1
+          fi
+          docker buildx build --platform linux/arm64 --provenance=false --sbom=false --push -f "$dockerfile" -t "$image_uri" .
+        fi
+        printf 'image_uri=%s\n' "$image_uri" >> "$GITHUB_OUTPUT"

@@ -1,42 +1,91 @@
 # Jimmy
 
-AI-native quantitative research platform. Application implementation has not started.
+Workflow-oriented research applications run as on-demand Amazon ECS Fargate tasks using OpenAI models. Each workflow
+owns its HTTP API and execution code. API Gateway routes to the workflow's own
+Lambda adapter, which starts a standalone Fargate task for each submitted paper.
 
-## Development environment
+```text
+workflows.json                       Registry used by CI, deployment and infrastructure
+services/paper_replication/
+  src/paper_replication_api.py        Workflow-owned HTTP endpoints
+  src/harness/workflow.py                    LangChain Principal Investigator harness
+  Dockerfile.api                     API Lambda image
+  Dockerfile                         Fargate task image
+packages/                            Shared authentication and API setup
+infra/foundation/                    Gateway, hosting, repositories and shared log encryption
+infra/auth/                          Cognito and JWT authorizer
+infra/modules/workflow/              Reusable API + ECS deployment module
+infra/workflows/                     Module entry point, separate state per workflow
+.github/workflows/                   Registry-driven CI and deployment matrices
+.github/actions/                     Reusable deployment steps
+```
 
-- AWS account: `499133675835`
-- AWS region: `us-east-1`
-- Environment: `dev`
-- AWS resource names: `jimmy-<env>-<purpose>`
-- GitHub Actions role: `jimmy-dev-github-actions`
+There is no central API service or central Python router to update. Shared helpers
+contain infrastructure concerns; paper-specific routes, schemas and agent tools stay
+inside the paper replication service.
 
-## GitHub Actions
+## Add a workflow
 
-- **CI** validates the workflow files with checksum-verified Actionlint on pull
-  requests to `main`. It is also reusable by the dev workflow and can run manually.
-- **Dev AWS connection** runs on pushes to `main` or manually from `main`. It
-  requires CI to pass, then verifies OIDC authentication and the AWS account.
-- The GitHub environment `dev` permits only the `main` branch, with no allowed
-  tags. PR checks have no AWS credentials or OIDC token permission.
-- Third-party Actions are pinned to full commit SHAs. There are no stored AWS keys.
+Create `services/<id>/` with its API, Fargate task entry point, dependencies, Dockerfiles
+and tests. Add an entry to `workflows.json`; CI and deployment discover it automatically.
+Add frontend views as needed.
 
-This is the CI/CD foundation, not an application deployment. Once hosting is
-selected, add build, test, and deployment steps here. All application and
-infrastructure deployments must run through GitHub Actions.
+See [adding a workflow](docs/adding-a-workflow.md) for the ownership and execution contract.
 
-## AWS authentication bootstrap
+## Paper replication
 
-The account-wide GitHub OIDC provider already existed and is reused unchanged.
-The project role's trust policy is tracked in
-[`infra/iam/github-actions-dev-trust.json`](infra/iam/github-actions-dev-trust.json).
-Its subject uses immutable GitHub owner and repository IDs and is restricted to
-the `dev` environment. The environment's branch restriction is a required part of
-this trust configuration: an environment OIDC subject alone does not limit branches.
+One LangChain Principal Investigator plans paper experiments and extrapolations
+from page-grounded claims. It delegates data collection to Research Assistants
+in parallel across up to four rounds, reviews coverage, and freezes the experiment
+suite. Assistants run the frozen suite in parallel using trusted numerical
+templates, then the PI writes its assessment from the resulting evidence.
 
-The role is initially created without attached permission policies. It can verify
-its identity with STS but cannot deploy resources. Add resource-specific deployment
-permissions when the hosting design is approved; do not attach administrator access.
+The frontend calls `/api/paper-replication/*`. Cognito provides email signup and sign-in, API Gateway
+checks JWTs, and the workflow API checks ownership on every run and artifact request. The
+API stores the input in S3 and starts the Fargate task. S3 stores progress
+and the report after the task exits. DynamoDB indexes each authenticated user’s run history across browsers and devices. Original uploaded PDFs remain downloadable from the run view.
+Searchable PDFs up to 3 MB / 250 pages are supported; scanned papers need OCR first. Web search
+is disabled until a real provider is configured.
 
-The one-time IAM role bootstrap is performed using an existing AWS administrator
-session because GitHub Actions cannot assume a role before it exists. Subsequent
-deployment changes belong in Actions and version-controlled infrastructure.
+## Verification
+
+The application runs in AWS: CloudFront serves the frontend, API Gateway routes to
+Lambda, Cognito authenticates users, and ECS Fargate runs each workflow. OpenAI
+provides model inference. There is no local application runtime or authentication bypass.
+
+Tests and builds can run without deploying or accessing AWS. Use Python 3.12 and Node 24:
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m pytest -q
+npm --prefix apps/web ci
+npm --prefix apps/web test
+npm --prefix apps/web run build
+```
+
+GitHub environments provide `AWS_ACCOUNT_ID`, `AWS_REGION`, and `OPENAI_API_KEY`
+secrets. Terraform creates the OpenAI secret and passes its ARN to the ECS task automatically.
+Dev has the ECS deployment permissions. See [deployment setup](docs/deployment.md).
+The runtime loads its key from Secrets Manager;
+it does not read `.env` files. `OPENAI_MODEL` defaults to `gpt-6.1-sol` for the PI,
+and `RESEARCH_ASSISTANT_MODEL` defaults to `gpt-5-mini` for the assistants.
+`PI_MAX_MODEL_CALLS` defaults to 48 per run.
+
+## Deployment
+
+Pushes to `dev` and `prod` deploy to the matching GitHub environment. Protect those
+branches to require reviewed merges and passing CI. PRs never deploy; there is no
+manual deployment trigger.
+
+Infrastructure is provisioned first, then Cognito. A matrix job named for each
+registered workflow calls a reusable two-job deployment: publish its API/runtime
+ARM64 images, then provision the workflow using state key
+`workflows/<id>/terraform.tfstate`. Workflows deploy independently in parallel. Frontend publishing waits for all workflow jobs to succeed and verifies
+each registered API's health/authentication.
+
+Deployment commands live in GitHub Actions; AWS resource definitions live in Terraform.
+See [deployment setup](docs/deployment.md) for required OIDC roles and GitHub settings.
+No replacement resources were deployed during this refactor. Cloud login/model access
+and container builds still need deployment validation; local tests do not establish them.

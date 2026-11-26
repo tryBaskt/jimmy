@@ -1,0 +1,10 @@
+{
+  "workflows": [
+    {
+      "id": "paper_replication",
+      "name": "Paper replication",
+      "api_prefix": "/api/paper-replication",
+      "requires_openai": true
+    }
+  ]
+}
