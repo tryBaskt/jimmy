@@ -1,0 +1,98 @@
+name: Deploy Terraform stack
+description: >
+  Signs in to AWS through GitHub OIDC, makes sure the environment's state bucket exists,
+  and applies one Terraform stack from infra/stacks/<stack>. Every infrastructure
+  component (auth, frontend, backend, agent workflows, ...) is deployed with this action
+  from its own job.
+
+inputs:
+  stack:
+    description: Folder name under infra/stacks.
+    required: true
+  environment:
+    description: Environment name (matches the branch and GitHub environment), e.g. dev2.
+    required: true
+  aws-account-id:
+    description: AWS account ID.
+    required: true
+  aws-region:
+    description: AWS region.
+    required: false
+    default: us-east-1
+  terraform-version:
+    description: Terraform CLI version.
+    required: false
+    default: "~1.15"
+
+outputs:
+  outputs-json:
+    description: Result of `terraform output -json` for the stack.
+    value: ${{ steps.outputs.outputs.json }}
+
+runs:
+  using: composite
+  steps:
+    - name: Sign in to AWS
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: arn:aws:iam::${{ inputs.aws-account-id }}:role/jimmy-${{ inputs.environment }}-github-deploy
+        role-session-name: gha-${{ inputs.stack }}-${{ github.run_id }}
+        aws-region: ${{ inputs.aws-region }}
+
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: ${{ inputs.terraform-version }}
+        terraform_wrapper: false
+
+    - name: Ensure state bucket
+      shell: bash
+      env:
+        STATE_BUCKET: jimmy-${{ inputs.environment }}-state-${{ inputs.aws-account-id }}
+        AWS_REGION: ${{ inputs.aws-region }}
+      run: |
+        set -euo pipefail
+        if aws s3api head-bucket --bucket "$STATE_BUCKET" 2>/dev/null; then
+          echo "State bucket $STATE_BUCKET exists."
+          exit 0
+        fi
+        echo "Creating state bucket $STATE_BUCKET"
+        if [ "$AWS_REGION" = "us-east-1" ]; then
+          aws s3api create-bucket --bucket "$STATE_BUCKET"
+        else
+          aws s3api create-bucket --bucket "$STATE_BUCKET" \
+            --create-bucket-configuration LocationConstraint="$AWS_REGION"
+        fi
+        aws s3api put-public-access-block --bucket "$STATE_BUCKET" \
+          --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+        aws s3api put-bucket-versioning --bucket "$STATE_BUCKET" --versioning-configuration Status=Enabled
+        aws s3api put-bucket-encryption --bucket "$STATE_BUCKET" \
+          --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+
+    - name: Terraform init
+      shell: bash
+      working-directory: infra/stacks/${{ inputs.stack }}
+      run: |
+        terraform init -input=false \
+          -backend-config="bucket=jimmy-${{ inputs.environment }}-state-${{ inputs.aws-account-id }}" \
+          -backend-config="key=${{ inputs.stack }}/terraform.tfstate" \
+          -backend-config="region=${{ inputs.aws-region }}"
+
+    - name: Terraform apply
+      shell: bash
+      working-directory: infra/stacks/${{ inputs.stack }}
+      env:
+        TF_VAR_environment: ${{ inputs.environment }}
+        TF_VAR_region: ${{ inputs.aws-region }}
+      run: terraform apply -input=false -auto-approve
+
+    - name: Read outputs
+      id: outputs
+      shell: bash
+      working-directory: infra/stacks/${{ inputs.stack }}
+      run: |
+        {
+          echo "json<<TF_OUTPUTS_EOF"
+          terraform output -json
+          echo "TF_OUTPUTS_EOF"
+        } >> "$GITHUB_OUTPUT"

@@ -1,0 +1,89 @@
+name: Deploy
+
+# One job per infrastructure component. To add a component (backend, agent workflows, ...):
+#   1. Add its Terraform under infra/stacks/<component>.
+#   2. Add a job below that calls ./.github/actions/deploy-stack with stack: <component>,
+#      and `needs:` the jobs whose outputs it uses.
+on:
+  push:
+    branches: [dev2]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  ENVIRONMENT: ${{ github.ref_name }}
+
+jobs:
+  auth:
+    name: Authentication (Cognito)
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name }}
+    outputs:
+      user_pool_id: ${{ fromJSON(steps.stack.outputs.outputs-json).user_pool_id.value }}
+      user_pool_client_id: ${{ fromJSON(steps.stack.outputs.outputs-json).user_pool_client_id.value }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: stack
+        uses: ./.github/actions/deploy-stack
+        with:
+          stack: auth
+          environment: ${{ env.ENVIRONMENT }}
+          aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+
+  frontend:
+    name: Frontend (S3 + CloudFront)
+    needs: auth
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.ref_name }}
+      url: ${{ steps.publish.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: stack
+        uses: ./.github/actions/deploy-stack
+        with:
+          stack: frontend
+          environment: ${{ env.ENVIRONMENT }}
+          aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build web app
+        working-directory: web
+        env:
+          VITE_COGNITO_USER_POOL_ID: ${{ needs.auth.outputs.user_pool_id }}
+          VITE_COGNITO_USER_POOL_CLIENT_ID: ${{ needs.auth.outputs.user_pool_client_id }}
+        run: |
+          npm ci
+          npm run build
+
+      - name: Publish to S3 and invalidate CloudFront
+        id: publish
+        env:
+          BUCKET: ${{ fromJSON(steps.stack.outputs.outputs-json).bucket_name.value }}
+          DISTRIBUTION_ID: ${{ fromJSON(steps.stack.outputs.outputs-json).distribution_id.value }}
+          URL: ${{ fromJSON(steps.stack.outputs.outputs-json).url.value }}
+        run: |
+          set -euo pipefail
+          # Hashed assets can be cached forever; index.html must always be revalidated.
+          aws s3 sync web/dist "s3://$BUCKET" --delete \
+            --exclude index.html --cache-control "public,max-age=31536000,immutable"
+          aws s3 cp web/dist/index.html "s3://$BUCKET/index.html" \
+            --cache-control "no-cache" --content-type "text/html"
+          aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths "/index.html" "/" > /dev/null
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "### Deployed to $URL" >> "$GITHUB_STEP_SUMMARY"
