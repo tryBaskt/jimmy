@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [dev2]
+  push:
+    branches: [rebuild]
+
+permissions:
+  contents: read
+
+jobs:
+  # Required status check for merging into dev2 (ruleset "protect-dev2"). Keep the job id.
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Web - install, lint, build
+        working-directory: web
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.15"
+
+      - name: Terraform - format check
+        run: terraform fmt -check -recursive infra
+
+      - name: Terraform - validate every stack
+        run: |
+          set -euo pipefail
+          for stack in infra/stacks/*/; do
+            echo "::group::validate $stack"
+            terraform -chdir="$stack" init -backend=false -input=false > /dev/null
+            terraform -chdir="$stack" validate
+            echo "::endgroup::"
+          done
