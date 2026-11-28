@@ -36,7 +36,7 @@ jobs:
           stack: auth
           environment: ${{ env.ENVIRONMENT }}
           aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
-          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
 
   frontend:
     name: Frontend (S3 + CloudFront)
@@ -54,7 +54,7 @@ jobs:
           stack: frontend
           environment: ${{ env.ENVIRONMENT }}
           aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
-          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
 
       - uses: actions/setup-node@v4
         with:
@@ -68,6 +68,10 @@ jobs:
           VITE_COGNITO_USER_POOL_ID: ${{ needs.auth.outputs.user_pool_id }}
           VITE_COGNITO_USER_POOL_CLIENT_ID: ${{ needs.auth.outputs.user_pool_client_id }}
         run: |
+          if [ -z "$VITE_COGNITO_USER_POOL_ID" ] || [ -z "$VITE_COGNITO_USER_POOL_CLIENT_ID" ]; then
+            echo "::error::Cognito outputs from the auth job are empty; refusing to build an unconfigured app."
+            exit 1
+          fi
           npm ci
           npm run build
 
